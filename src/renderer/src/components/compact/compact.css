@@ -1,0 +1,269 @@
+/* ============================================================
+   PROTONMUSIC — COMPACT MODE (layout only — visuals via inline styles)
+   ============================================================ */
+
+/* --- Shell --- */
+.compact-shell {
+  width: 400px;
+  height: 150px;
+  overflow: hidden;
+  position: relative;
+  user-select: none;
+}
+
+/* --- Scanline overlay --- */
+.compact-scanlines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* --- Title Bar --- */
+.compact-titlebar {
+  display: flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 3px;
+}
+
+.compact-titlebar-drag {
+  flex: 1;
+  -webkit-app-region: drag;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding-left: 6px;
+}
+
+.compact-titlebar-text {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.compact-titlebar-buttons {
+  display: flex;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.compact-chrome-btn {
+  width: 16px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.compact-chrome-icon {
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* --- Body --- */
+.compact-body {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 6px;
+  gap: 4px;
+  flex: 1;
+}
+
+/* --- LCD Panel --- */
+.compact-lcd {
+  flex-shrink: 0;
+}
+
+.compact-lcd-screen {
+  position: relative;
+  padding: 5px 8px 4px;
+  overflow: hidden;
+}
+
+.compact-lcd-scanlines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Marquee */
+.compact-lcd-marquee {
+  overflow: hidden;
+  white-space: nowrap;
+  height: 18px;
+  line-height: 18px;
+  margin-bottom: 3px;
+}
+
+.compact-lcd-marquee-text {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* Spectrum Analyzer Canvas */
+.compact-lcd-spectrum {
+  display: block;
+  width: 100%;
+  height: 20px;
+  image-rendering: pixelated;
+  margin-bottom: 3px;
+}
+
+/* Bottom row: badges + time */
+.compact-lcd-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.compact-lcd-badges {
+  display: flex;
+  gap: 6px;
+}
+
+.compact-lcd-badge {
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.compact-lcd-time {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.compact-lcd-time-sep {
+  margin: 0 1px;
+}
+
+/* --- Controls Row --- */
+.compact-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* --- Transport Buttons --- */
+.compact-transport {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.compact-transport-btn {
+  width: 28px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.compact-transport-toggle {
+  width: 24px;
+}
+
+/* --- Seek Bar --- */
+.compact-seekbar {
+  flex: 1;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.compact-seekbar-groove {
+  height: 6px;
+  border-radius: 1px;
+  position: relative;
+  overflow: visible;
+}
+
+.compact-seekbar-fill {
+  height: 100%;
+  border-radius: 1px 0 0 1px;
+  position: relative;
+  min-width: 0;
+}
+
+.compact-seekbar-thumb {
+  position: absolute;
+  right: -5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 10px;
+  height: 14px;
+  border-radius: 2px;
+}
+
+/* --- Volume --- */
+.compact-volume {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  width: 80px;
+}
+
+.compact-volume-icon {
+  flex-shrink: 0;
+}
+
+.compact-volume-track {
+  flex: 1;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.compact-volume-groove {
+  height: 4px;
+  border-radius: 1px;
+  position: relative;
+}
+
+.compact-volume-fill {
+  height: 100%;
+  border-radius: 1px 0 0 1px;
+  position: relative;
+}
+
+.compact-volume-thumb {
+  position: absolute;
+  right: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 8px;
+  height: 10px;
+  border-radius: 1px;
+}
+
+/* ============================================================
+   EASTER EGG — animations use CSS custom properties set inline
+   ============================================================ */
+
+.easter-egg-active {
+  animation: easter-egg-flicker 0.15s infinite alternate;
+}
+
+.easter-egg-glitch {
+  animation: easter-egg-glitch-text 0.3s infinite alternate;
+}
+
+@keyframes easter-egg-flicker {
+  0% { opacity: 1; }
+  50% { opacity: 0.97; }
+  100% { opacity: 0.93; }
+}
+
+@keyframes easter-egg-glitch-text {
+  0% { opacity: 1; }
+  30% { opacity: 0.95; }
+  60% { opacity: 1; }
+  100% { opacity: 0.98; }
+}
