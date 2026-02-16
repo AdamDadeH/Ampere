@@ -3,8 +3,8 @@ import { useMemo } from 'react'
 import type { Theme, CompactSkin } from '../themes/types'
 import { themesById, midnight } from '../themes/skins'
 
-const STORAGE_KEY = 'protonmusic-theme'
-const CUSTOM_SKIN_KEY = 'protonmusic-compact-skin'
+const STORAGE_KEY = 'ampere-theme'
+const CUSTOM_SKIN_KEY = 'ampere-compact-skin'
 
 function applyTheme(theme: Theme): void {
   const root = document.documentElement

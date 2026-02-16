@@ -11,13 +11,13 @@ import {
 } from 'node-taglib-sharp'
 import { v4 as uuidv4 } from 'uuid'
 
-const OWNER = 'protonmusic'
-const XIPH_KEY = 'PROTONMUSIC_ID'
-const ITUNES_MEAN = 'com.protonmusic'
+const OWNER = 'ampere'
+const XIPH_KEY = 'AMPERE_ID'
+const ITUNES_MEAN = 'com.ampere'
 const ITUNES_NAME = 'id'
 
 /**
- * Reads the embedded PROTONMUSIC_ID from a file's tags.
+ * Reads the embedded AMPERE_ID from a file's tags.
  * Returns the ID if found, null otherwise.
  */
 export function readEmbeddedId(filePath: string): string | null {
@@ -65,7 +65,7 @@ export function readEmbeddedId(filePath: string): string | null {
 }
 
 /**
- * Writes a PROTONMUSIC_ID into the file's tags.
+ * Writes a AMPERE_ID into the file's tags.
  * Returns the ID that was written.
  * If the file already has an ID, returns it without writing.
  */
@@ -142,7 +142,7 @@ export function ensureEmbeddedId(filePath: string): string | null {
 }
 
 /**
- * Reads the PROTONMUSIC_ID from an already-opened TagFile.
+ * Reads the AMPERE_ID from an already-opened TagFile.
  */
 function readIdFromFile(file: TagFile): string | null {
   // Try ID3v2

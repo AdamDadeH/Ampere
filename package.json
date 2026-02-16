@@ -1,5 +1,5 @@
 {
-  "name": "protonmusic",
+  "name": "ampere",
   "version": "1.0.0",
   "main": "./out/main/index.js",
   "scripts": {
@@ -10,7 +10,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "ProtonMusic - A music library app",
+  "description": "Ampere — a desktop music player with Winamp skin support",
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.18",
     "@types/better-sqlite3": "^7.6.13",

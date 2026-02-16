@@ -1,4 +1,4 @@
-# ProtonMusic
+# Ampere
 
 A desktop music player built with Electron, React, and SQLite. Features a library browser with full metadata support and a compact Winamp-inspired mini player with a real-time spectrum analyzer.
 
@@ -140,8 +140,8 @@ Compact ↔ Library (cross-window):
 ```
                     ┌─────────────────────┐
                     │  localStorage       │
-                    │  'protonmusic-theme' │ ──── theme ID (string)
-                    │  'protonmusic-       │
+                    │  'ampere-theme' │ ──── theme ID (string)
+                    │  'ampere-       │
                     │   compact-skin'      │ ──── CompactSkin (JSON)
                     └──────────┬──────────┘
                                │

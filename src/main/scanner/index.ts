@@ -91,7 +91,7 @@ export class FolderScanner {
       try {
         const { track, parsedTrackArtists, parsedAlbumArtists } = await this.extractMetadata(file.path, file.name, file.size)
 
-        // Try to read or write the embedded PROTONMUSIC_ID
+        // Try to read or write the embedded AMPERE_ID
         const embeddedId = ensureEmbeddedId(file.path)
         if (embeddedId) {
           track.embedded_id = embeddedId

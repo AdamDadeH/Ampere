@@ -27,7 +27,7 @@ const CANVAS_H = 20
 const BAR_GAP = 1
 const BAR_W = Math.floor((CANVAS_W - (SPECTRUM_BARS - 1) * BAR_GAP) / SPECTRUM_BARS)
 
-const EASTER_EGG_TEXT = 'ProtonMusic v1.0 \u2014 it really whips the llama\'s ass!'
+const EASTER_EGG_TEXT = 'Ampere v1.0 \u2014 it really whips the llama\'s ass!'
 
 // --- Spectrum drawing functions ---
 

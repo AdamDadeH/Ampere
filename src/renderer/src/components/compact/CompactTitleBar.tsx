@@ -41,7 +41,7 @@ export function CompactTitleBar({ onSwitchToLibrary, skin }: CompactTitleBarProp
     <div className="compact-titlebar" style={titlebarStyle}>
       <div className="compact-titlebar-drag">
         <span className="compact-titlebar-text" style={{ color: tb.textColor, textShadow: tb.textShadow }}>
-          PROTONMUSIC
+          AMPERE
         </span>
       </div>
       <div className="compact-titlebar-buttons">
