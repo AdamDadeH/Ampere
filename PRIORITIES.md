@@ -1,10 +1,14 @@
-# Ampere — Priorities
+# Ampere + Riemann — Priorities
 
 ## The Vision
 
-Ampere is a love letter to the peak of 90s/2000s internet culture — the era of warez sites, demoscene, Winamp skins, and MilkDrop visualizations. The compact player should make people say _"why did they go this far"_ and then immediately download a .wsz skin from the Winamp Skin Museum.
+Two names. Two ideas. One system.
 
-This is not a music player that happens to support skins. This is a skin engine that happens to play music.
+**Ampere** is the current — electricity, signal, energy. A love letter to the peak of 90s/2000s internet culture — warez sites, demoscene, Winamp skins, MilkDrop visualizations. A skin engine that happens to play music. The compact player should make people say _"why did they go this far"_ and then immediately download a .wsz skin from the Winamp Skin Museum.
+
+**Riemann** is the geometry — curved space, manifolds, the shape that your music inhabits when you stop thinking of it as a list. Your library embedded in acoustic feature space is a Riemannian manifold. The distance between tracks isn't Euclidean — it's warped by perception, by timbre, by the nonlinear way humans hear. Geodesics on that manifold are optimal playlists. Curvature tells you where genres blend. Your listening history shapes the metric.
+
+Ampere is the body. Riemann is the mind. Together: a player that knows the shape of your music and lets you move through it.
 
 ---
 
@@ -168,14 +172,96 @@ This is the other priority because it makes the player actually usable day-to-da
 
 ---
 
-## P4 — Future Ambitions
+## P4 — Riemann: The Geometry of Music
+
+These aren't features. They're a thesis: **your music library has a shape, and you should be able to walk through it.**
+
+Riemann is the module that computes audio embeddings, builds the manifold, renders the navigator, and hands tracks back to Ampere for playback. It can live as a view within the app or as a standalone full-screen experience.
+
+### The Navigator — 3D Audio-Reactive Library Map
+
+Your library is a universe. Every track is a point in 3D space, positioned by its acoustic DNA — spectral profile, tempo, energy, harmonic content. Similar tracks cluster into constellations. Genres form galaxies.
+
+**The experience:**
+- **Zoomed out** — nebulae of clusters. Each hums with a composite audio signature — the spectral average of its tracks. You *hear the topology* before you see individual songs. The ambient drone of your shoegaze region. The rhythmic pulse from hip-hop. The bright shimmer of your jazz corner.
+- **Flying closer** — the cluster resolves into individual points. The composite fades. The most-played tracks in the neighborhood become audible in spatial audio (Web Audio `PannerNode` with HRTF), panned in 3D based on their position relative to your camera.
+- **Close approach** — a single track grows louder. Cross its threshold and it becomes the active track — full playback, full fidelity. Surrounding geometry reacts. Neighboring tracks pulse gently, showing where you could go next.
+- **The trail** — your listening history traces a glowing path through the space. Over weeks, you see your patterns — the routes you take, the regions you return to, the unexplored territories at the edges.
+
+**The aesthetic:** Nier Automata's hacking scenes meets REZ — black void, glowing geometric nodes, the camera pulling through space, everything pulsing and alive. The darkness between the nodes matters as much as the nodes themselves. Wireframe geometry, particle systems, bloom and glow. Not a visualization bolted onto a player — the player *is* the visualization.
+
+**Technical architecture:**
+- Audio feature extraction: spectral centroid, MFCCs, tempo, RMS energy, chromagram — via Essentia.js or lightweight ONNX model running locally
+- Dimensionality reduction: UMAP projecting high-dimensional audio features into 3D coordinates (better than t-SNE for preserving global structure)
+- Rendering: Three.js with instanced meshes for thousands of track particles, bloom post-processing, wireframe aesthetic
+- Spatial audio: Web Audio `PannerNode` for 3D positioning, distance-based gain rolloff
+- LOD audio: zoomed-out clusters play a "spectral summary" (average FFT of member tracks rendered as noise-shaped drone), zooming in crossfades to actual tracks
+- Interaction: WASD/gamepad flight, mouse look, scroll to zoom, click to play
+
+### Content-Informed Recommendations
+
+Not collaborative filtering ("people who liked X liked Y"). Not metadata matching ("same genre tag"). **Acoustic similarity** — what does the music actually *sound like?*
+
+- Extract per-track audio embeddings from the raw waveform (spectral features, rhythm patterns, harmonic structure, timbre fingerprint)
+- Build a similarity graph: every track connected to its K nearest neighbors in embedding space
+- Playlist generation as *path planning through the graph*: define a mood trajectory ("start mellow, build energy, peak, cool down") and find the optimal route
+- The EQ settings you save are implicit taste signal — if you boost bass on certain tracks, you prefer warmth in that region of the space
+- Listening patterns as gravity: frequently-played tracks warp the space around them, pulling recommendations toward your actual taste rather than algorithmic assumptions
+- All local. No cloud. Your embeddings, your graph, your data.
+
+### Demoscene Visualization Engine
+
+Winamp had MilkDrop. We go further. A shader-based visualization engine that channels the warez/demoscene aesthetic:
+
+- **Fragment shader pipeline**: audio frequency data → GLSL uniforms → real-time procedural graphics
+- **Classic effects library**: plasma, tunnel flythrough, fractal flames, metaballs, raymarched signed distance fields, Menger sponges, infinite zoom fractals — all audio-reactive
+- **Preset system**: ship with curated presets, but expose a mini Shadertoy editor for users to write their own
+- **Beat detection**: not just amplitude — detect kicks, snares, transitions. Visuals that respond to musical structure, not just volume
+- **Integration with The Navigator**: when playing a track in the 3D map, the demoscene visualization wraps around the active node — the geometry of the space becomes the visualization canvas
+- **Butterchurn first**: start with the existing MilkDrop WebGL port for thousands of classic presets, then layer custom shaders on top
+
+### Intelligent Transitions
+
+Go beyond crossfade. The space between tracks is sacred:
+
+- BPM detection + beat phase alignment for seamless tempo-matched transitions
+- Key detection (chromagram analysis) — prefer transitions between harmonically compatible keys
+- Energy curve analysis — match the outro energy of the outgoing track to the intro energy of the incoming
+- Auto-DJ mode: the system sequences your queue to minimize jarring transitions while maximizing discovery
+- This feeds directly into The Navigator — the "flight path" through the 3D space IS the playlist, and transitions are the smoothness of the curve
+
+### Time Machine Analytics
+
+You're already tracking play counts and timestamps in SQLite. Over months of listening:
+
+- Personal listening timeline — "Your 2026 in Music"
+- Mood patterns: what do you listen to at 2am vs 8am? Rainy days vs sunny?
+- Genre phase transitions: track how your taste drifts over weeks
+- Rediscovery alerts: "You haven't visited this region of your library in 3 months"
+- Listening streaks, deep-dive sessions, one-off explorations
+- Heat map overlay on The Navigator — see which regions you've explored thoroughly and which remain uncharted
+
+### Live Effects Rack
+
+The 10-band EQ is the beginning. Web Audio gives us everything:
+
+- Reverb (ConvolverNode with impulse responses — cathedral, plate, spring)
+- Delay / echo
+- Dynamic compression
+- Stereo widening
+- Pitch shift / time stretch
+- Modular drag-and-drop effects chain UI
+- Per-track effect presets that persist
+- "Studio mode" panel in the classic layout
+
+---
+
+## P5 — Original Future Ambitions (Still Valid)
 
 - Last.fm scrobbling
 - Lyrics display (synced + static)
 - Crossfade between tracks (configurable duration)
-- Equalizer (10-band, with presets)
 - ReplayGain / volume normalization
-- Listening statistics dashboard
 - System tray mode
 - `.wal` modern Winamp skin format
 - Skin sharing / community gallery
@@ -218,6 +304,8 @@ The original PRD envisioned a cloud-first Proton Drive music manager. The app ha
 
 ### The Pivot
 The PRD was practical. The app became something else — a vehicle for reviving the golden age of desktop customization. The skin engine, the visualizations, the pixel-perfect bitmap fonts — that's the soul. Everything else serves it.
+
+And then Riemann happened. The app isn't just reviving the past — it's building something that never existed: a music player where your library has geometry, where listening is navigation, where the space between songs is as meaningful as the songs themselves.
 
 ---
 
