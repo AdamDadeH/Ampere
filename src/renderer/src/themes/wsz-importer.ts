@@ -1,5 +1,5 @@
 import JSZip from 'jszip'
-import type { CompactSkin } from './types'
+import type { CompactSkin, WinampSprites, PleditColors } from './types'
 import { buildCompactSkin } from './compact-builder'
 
 // Track active blob URLs so we can revoke them when loading a new skin
@@ -149,6 +149,31 @@ function parseViscolor(text: string): [number, number, number][] {
   return colors
 }
 
+/** Parse PLEDIT.TXT — INI-style file with [Text] section containing color values */
+function parsePledit(text: string): PleditColors {
+  const colors: PleditColors = {
+    normal: '#00FF00',
+    current: '#FFFFFF',
+    normBg: '#000000',
+    selectBg: '#0000FF',
+  }
+  const lines = text.split(/\r?\n/)
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const match = trimmed.match(/^(\w+)=#?([0-9A-Fa-f]{6})/)
+    if (!match) continue
+    const [, key, hex] = match
+    const color = `#${hex}`
+    switch (key.toLowerCase()) {
+      case 'normal': colors.normal = color; break
+      case 'current': colors.current = color; break
+      case 'normbg': colors.normBg = color; break
+      case 'selectedbg': colors.selectBg = color; break
+    }
+  }
+  return colors
+}
+
 /** Try to extract an image file, checking for both BMP and PNG variants */
 async function extractImage(
   zip: JSZip,
@@ -165,6 +190,31 @@ async function extractImage(
   const url = imageToBlobUrl(data, ext)
   const img = await loadImage(url)
   return { url, img }
+}
+
+/** Replace magenta (#FF00FF) pixels with transparent and return a PNG data URL */
+function processTransparency(img: HTMLImageElement): string {
+  const canvas = document.createElement('canvas')
+  canvas.width = img.width
+  canvas.height = img.height
+  const ctx = canvas.getContext('2d')!
+  ctx.drawImage(img, 0, 0)
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  const pixels = imageData.data
+  for (let i = 0; i < pixels.length; i += 4) {
+    if (pixels[i] === 255 && pixels[i + 1] === 0 && pixels[i + 2] === 255) {
+      pixels[i + 3] = 0
+    }
+  }
+  ctx.putImageData(imageData, 0, 0)
+  return canvas.toDataURL('image/png')
+}
+
+/** Extract a sprite sheet as a PNG data URL with magenta transparency */
+async function extractSpriteDataUrl(zip: JSZip, baseName: string): Promise<string | undefined> {
+  const result = await extractImage(zip, baseName)
+  if (!result) return undefined
+  return processTransparency(result.img)
 }
 
 /**
@@ -250,6 +300,51 @@ export async function importWszSkin(buffer: ArrayBuffer): Promise<CompactSkin> {
   // Override titlebar background with the titlebar BMP if available
   if (titlebar) {
     skin.titlebar.background = `url(${titlebar.url}) left top/auto 100% no-repeat, ${skin.titlebar.background}`
+  }
+
+  // --- Extract all sprite sheets as data URLs with magenta transparency ---
+  const [
+    mainBmp, cButtonsBmp, titlebarBmp, posbarBmp, volumeBmp,
+    shufrepBmp, monosterBmp, playpausBmp, numbersBmp, textBmp,
+    eqmainBmp, pleditBmp, balanceBmp,
+  ] = await Promise.all([
+    Promise.resolve(processTransparency(main.img)),
+    extractSpriteDataUrl(zip, 'cbuttons'),
+    extractSpriteDataUrl(zip, 'titlebar'),
+    extractSpriteDataUrl(zip, 'posbar'),
+    extractSpriteDataUrl(zip, 'volume'),
+    extractSpriteDataUrl(zip, 'shufrep'),
+    extractSpriteDataUrl(zip, 'monoster'),
+    extractSpriteDataUrl(zip, 'playpaus'),
+    extractSpriteDataUrl(zip, 'numbers'),
+    extractSpriteDataUrl(zip, 'text'),
+    extractSpriteDataUrl(zip, 'eqmain'),
+    extractSpriteDataUrl(zip, 'pledit'),
+    extractSpriteDataUrl(zip, 'balance'),
+  ])
+
+  const sprites: WinampSprites = {}
+  if (mainBmp) sprites.mainBmp = mainBmp
+  if (cButtonsBmp) sprites.cButtonsBmp = cButtonsBmp
+  if (titlebarBmp) sprites.titlebarBmp = titlebarBmp
+  if (posbarBmp) sprites.posbarBmp = posbarBmp
+  if (volumeBmp) sprites.volumeBmp = volumeBmp
+  if (shufrepBmp) sprites.shufrepBmp = shufrepBmp
+  if (monosterBmp) sprites.monosterBmp = monosterBmp
+  if (playpausBmp) sprites.playpausBmp = playpausBmp
+  if (numbersBmp) sprites.numbersBmp = numbersBmp
+  if (textBmp) sprites.textBmp = textBmp
+  if (eqmainBmp) sprites.eqmainBmp = eqmainBmp
+  if (pleditBmp) sprites.pleditBmp = pleditBmp
+  if (balanceBmp) sprites.balanceBmp = balanceBmp
+
+  skin.sprites = sprites
+
+  // --- Parse PLEDIT.TXT for playlist colors ---
+  const pleditFile = findFile(zip, 'pledit.txt')
+  if (pleditFile) {
+    const pleditText = await pleditFile.async('string')
+    skin.pleditColors = parsePledit(pleditText)
   }
 
   return skin

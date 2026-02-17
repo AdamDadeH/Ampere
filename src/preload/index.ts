@@ -17,6 +17,16 @@ export interface PlayerState {
   shuffle: boolean
   repeatMode: 'off' | 'one' | 'all'
   frequencyData: number[]
+  eqEnabled: boolean
+  eqPreamp: number
+  eqBands: number[]
+  queueTracks: QueueTrackInfo[]
+}
+
+export interface QueueTrackInfo {
+  title: string
+  artist: string | null
+  duration: number
 }
 
 export interface ElectronAPI {
@@ -41,6 +51,7 @@ export interface ElectronAPI {
   getWindowMode(): Promise<'library' | 'compact'>
   windowMinimize(): Promise<void>
   windowClose(): Promise<void>
+  setCompactSize(width: number, height: number): Promise<void>
   remotePlayerCommand(command: string, ...args: unknown[]): void
   onPlayerCommand(callback: (command: string, ...args: unknown[]) => void): () => void
   sendPlayerState(state: PlayerState): void
@@ -76,6 +87,7 @@ const api: ElectronAPI = {
   getWindowMode: () => ipcRenderer.invoke('get-window-mode'),
   windowMinimize: () => ipcRenderer.invoke('window-minimize'),
   windowClose: () => ipcRenderer.invoke('window-close'),
+  setCompactSize: (width, height) => ipcRenderer.invoke('set-compact-size', width, height),
   remotePlayerCommand: (command, ...args) => ipcRenderer.send('remote-player-command', command, ...args),
   onPlayerCommand: (callback) => {
     const handler = (_event: unknown, command: string, ...args: unknown[]): void => callback(command, ...args)

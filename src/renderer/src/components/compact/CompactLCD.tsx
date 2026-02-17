@@ -1,5 +1,12 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import type { CompactSkin, CompactSpectrumStyle } from '../../themes/types'
+import {
+  NUMBERS_CHAR_MAP,
+  TEXT_CHAR_MAP,
+  PLAYPAUS_SPRITES,
+  MONOSTER_SPRITES,
+  spriteStyleScaled,
+} from '../../themes/sprite-constants'
 
 interface CompactLCDProps {
   title: string | null
@@ -135,12 +142,110 @@ function drawEasterEggSpectrum(
   spectrumRenderers[style](ctx, synthData, rgb, 0.5)
 }
 
+// --- Bitmap font rendering helpers ---
+
+// NUMBERS.BMP digit rendering: native 9x13, display scaled ~1.5x
+const NUM_SCALE = 1.5
+const NUM_DISPLAY_W = Math.round(9 * NUM_SCALE)
+const NUM_DISPLAY_H = Math.round(13 * NUM_SCALE)
+const NUMBERS_SHEET_W = 99
+const NUMBERS_SHEET_H = 13
+
+// TEXT.BMP character rendering: native 5x6, display scaled ~2x
+const TEXT_SCALE = 2
+const TEXT_CHAR_W = Math.round(5 * TEXT_SCALE)
+const TEXT_CHAR_H = Math.round(6 * TEXT_SCALE)
+const TEXT_SHEET_W = 155
+const TEXT_SHEET_H = 18
+
+// PLAYPAUS.BMP: native 9x9, display scaled ~1.2x
+const PLAYPAUS_DISPLAY = 11
+const PLAYPAUS_SHEET_W = 42
+const PLAYPAUS_SHEET_H = 9
+
+// MONOSTER.BMP: display height ~12
+const MONOSTER_DISPLAY_H = 12
+const MONOSTER_SHEET_W = 56
+const MONOSTER_SHEET_H = 24
+
+function BitmapDigits({ text, dataUrl }: { text: string; dataUrl: string }): React.JSX.Element {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+      {text.split('').map((ch, i) => {
+        if (ch === ':') {
+          // Render colon as a narrow separator
+          return (
+            <span
+              key={i}
+              style={{
+                display: 'inline-block',
+                width: Math.round(NUM_DISPLAY_W * 0.5),
+                height: NUM_DISPLAY_H,
+                position: 'relative',
+              }}
+            >
+              <span style={{
+                position: 'absolute',
+                left: '50%', top: '25%',
+                transform: 'translate(-50%, 0)',
+                width: 2, height: 2,
+                borderRadius: '50%',
+                background: 'currentColor',
+              }} />
+              <span style={{
+                position: 'absolute',
+                left: '50%', top: '60%',
+                transform: 'translate(-50%, 0)',
+                width: 2, height: 2,
+                borderRadius: '50%',
+                background: 'currentColor',
+              }} />
+            </span>
+          )
+        }
+        const region = NUMBERS_CHAR_MAP[ch]
+        if (!region) return <span key={i} style={{ display: 'inline-block', width: NUM_DISPLAY_W, height: NUM_DISPLAY_H }} />
+        const style = spriteStyleScaled(dataUrl, region, NUM_DISPLAY_W, NUM_DISPLAY_H, NUMBERS_SHEET_W, NUMBERS_SHEET_H)
+        return <span key={i} className="compact-sprite" style={style} />
+      })}
+    </span>
+  )
+}
+
+function BitmapMarquee({
+  text, dataUrl, offset,
+}: {
+  text: string
+  dataUrl: string
+  offset: number
+}): React.JSX.Element {
+  const upper = text.toUpperCase()
+  return (
+    <div style={{
+      display: 'flex',
+      transform: `translateX(${offset}px)`,
+      willChange: 'transform',
+    }}>
+      {upper.split('').map((ch, i) => {
+        const region = TEXT_CHAR_MAP[ch]
+        if (!region) {
+          // Unknown char → blank space
+          return <span key={i} style={{ display: 'inline-block', width: TEXT_CHAR_W, height: TEXT_CHAR_H }} />
+        }
+        const style = spriteStyleScaled(dataUrl, region, TEXT_CHAR_W, TEXT_CHAR_H, TEXT_SHEET_W, TEXT_SHEET_H)
+        return <span key={i} className="compact-sprite" style={style} />
+      })}
+    </div>
+  )
+}
+
 export function CompactLCD({
   title, artist, currentTime, duration, bitrate, sampleRate, codec, isPlaying,
   frequencyData, easterEgg, skin
 }: CompactLCDProps): React.JSX.Element {
   const marqueeRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLSpanElement>(null)
+  const bitmapMarqueeRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [offset, setOffset] = useState(0)
   const animFrameRef = useRef<number>(0)
@@ -148,34 +253,65 @@ export function CompactLCD({
 
   const d = skin.display
   const sp = skin.spectrum
+  const sprites = skin.sprites
+
+  const hasNumbers = !!sprites?.numbersBmp
+  const hasText = !!sprites?.textBmp
+  const hasPlaypaus = !!sprites?.playpausBmp
+  const hasMonoster = !!sprites?.monosterBmp
 
   const displayText = easterEgg
     ? EASTER_EGG_TEXT
     : [artist, title].filter(Boolean).join(' - ') || 'No track'
 
   const animate = useCallback((timestamp: number) => {
-    if (!marqueeRef.current || !innerRef.current) return
+    if (hasText) {
+      // For bitmap marquee, measure using the container vs content width
+      const container = bitmapMarqueeRef.current?.parentElement
+      const content = bitmapMarqueeRef.current
+      if (!container || !content) return
 
-    const containerWidth = marqueeRef.current.clientWidth
-    const textWidth = innerRef.current.scrollWidth
+      const containerWidth = container.clientWidth
+      const textWidth = content.scrollWidth
 
-    if (textWidth <= containerWidth) {
-      setOffset(0)
-      return
+      if (textWidth <= containerWidth) {
+        setOffset(0)
+        return
+      }
+
+      if (!lastTimeRef.current) lastTimeRef.current = timestamp
+      const delta = timestamp - lastTimeRef.current
+      lastTimeRef.current = timestamp
+
+      setOffset(prev => {
+        const next = prev - delta * 0.03
+        if (Math.abs(next) > textWidth + 40) return containerWidth
+        return next
+      })
+    } else {
+      if (!marqueeRef.current || !innerRef.current) return
+
+      const containerWidth = marqueeRef.current.clientWidth
+      const textWidth = innerRef.current.scrollWidth
+
+      if (textWidth <= containerWidth) {
+        setOffset(0)
+        return
+      }
+
+      if (!lastTimeRef.current) lastTimeRef.current = timestamp
+      const delta = timestamp - lastTimeRef.current
+      lastTimeRef.current = timestamp
+
+      setOffset(prev => {
+        const next = prev - delta * 0.03
+        if (Math.abs(next) > textWidth + 40) return containerWidth
+        return next
+      })
     }
 
-    if (!lastTimeRef.current) lastTimeRef.current = timestamp
-    const delta = timestamp - lastTimeRef.current
-    lastTimeRef.current = timestamp
-
-    setOffset(prev => {
-      const next = prev - delta * 0.03
-      if (Math.abs(next) > textWidth + 40) return containerWidth
-      return next
-    })
-
     animFrameRef.current = requestAnimationFrame(animate)
-  }, [])
+  }, [hasText])
 
   useEffect(() => {
     if (isPlaying || easterEgg) {
@@ -223,6 +359,8 @@ export function CompactLCD({
 
   const kbps = bitrate ? `${Math.round(bitrate / 1000)}` : '--'
   const khz = sampleRate ? `${(sampleRate / 1000).toFixed(1)}` : '--'
+  const timeStr = formatTime(currentTime)
+  const durStr = formatTime(duration)
 
   const screenStyle: React.CSSProperties = {
     background: d.background,
@@ -242,19 +380,30 @@ export function CompactLCD({
         className={`compact-lcd-screen ${easterEgg ? 'easter-egg-active' : ''}`}
         style={screenStyle}
       >
+        {/* Marquee: bitmap font or regular text */}
         <div className="compact-lcd-marquee" ref={marqueeRef}>
-          <span
-            ref={innerRef}
-            className={`compact-lcd-marquee-text ${easterEgg ? 'easter-egg-glitch' : ''}`}
-            style={{
-              transform: `translateX(${offset}px)`,
-              fontFamily: d.fontFamily,
-              color: d.textColor,
-              textShadow: easterEgg ? skin.easterEgg.glitchShadow : d.textShadow,
-            }}
-          >
-            {displayText}
-          </span>
+          {hasText ? (
+            <div ref={bitmapMarqueeRef}>
+              <BitmapMarquee
+                text={displayText}
+                dataUrl={sprites!.textBmp!}
+                offset={offset}
+              />
+            </div>
+          ) : (
+            <span
+              ref={innerRef}
+              className={`compact-lcd-marquee-text ${easterEgg ? 'easter-egg-glitch' : ''}`}
+              style={{
+                transform: `translateX(${offset}px)`,
+                fontFamily: d.fontFamily,
+                color: d.textColor,
+                textShadow: easterEgg ? skin.easterEgg.glitchShadow : d.textShadow,
+              }}
+            >
+              {displayText}
+            </span>
+          )}
         </div>
         <canvas
           ref={canvasRef}
@@ -264,6 +413,33 @@ export function CompactLCD({
         />
         <div className="compact-lcd-bottom">
           <div className="compact-lcd-badges">
+            {/* Play/pause/stop indicator */}
+            {hasPlaypaus && (
+              <span
+                className="compact-sprite"
+                style={spriteStyleScaled(
+                  sprites!.playpausBmp!,
+                  isPlaying
+                    ? PLAYPAUS_SPRITES.playing
+                    : PLAYPAUS_SPRITES.stopped,
+                  PLAYPAUS_DISPLAY, PLAYPAUS_DISPLAY,
+                  PLAYPAUS_SHEET_W, PLAYPAUS_SHEET_H,
+                )}
+              />
+            )}
+            {/* Mono/stereo indicator */}
+            {hasMonoster && (
+              <span
+                className="compact-sprite"
+                style={spriteStyleScaled(
+                  sprites!.monosterBmp!,
+                  MONOSTER_SPRITES.stereoActive,
+                  Math.round(29 * (MONOSTER_DISPLAY_H / 12)),
+                  MONOSTER_DISPLAY_H,
+                  MONOSTER_SHEET_W, MONOSTER_SHEET_H,
+                )}
+              />
+            )}
             <span className="compact-lcd-badge" style={{ fontFamily: d.fontFamily, color: d.textDimColor, textShadow: d.textDimShadow }}>
               {kbps} kbps
             </span>
@@ -276,11 +452,20 @@ export function CompactLCD({
               </span>
             )}
           </div>
-          <div className="compact-lcd-time" style={{ fontFamily: d.fontFamily, color: d.textColor, textShadow: d.textShadow }}>
-            {formatTime(currentTime)}
-            <span className="compact-lcd-time-sep" style={{ color: d.textDimColor }}>/</span>
-            {formatTime(duration)}
-          </div>
+          {/* Time display: bitmap digits or regular text */}
+          {hasNumbers ? (
+            <div className="compact-lcd-time" style={{ color: d.textColor }}>
+              <BitmapDigits text={timeStr} dataUrl={sprites!.numbersBmp!} />
+              <span className="compact-lcd-time-sep" style={{ color: d.textDimColor, margin: '0 2px' }}>/</span>
+              <BitmapDigits text={durStr} dataUrl={sprites!.numbersBmp!} />
+            </div>
+          ) : (
+            <div className="compact-lcd-time" style={{ fontFamily: d.fontFamily, color: d.textColor, textShadow: d.textShadow }}>
+              {timeStr}
+              <span className="compact-lcd-time-sep" style={{ color: d.textDimColor }}>/</span>
+              {durStr}
+            </div>
+          )}
         </div>
         <div className="compact-lcd-scanlines" style={{ background: d.scanlines }} />
       </div>

@@ -253,6 +253,15 @@ function setupIPC(): void {
     return data.buffer
   })
 
+  ipcMain.handle('set-compact-size', (_event, width: number, height: number) => {
+    if (compactWindow && !compactWindow.isDestroyed()) {
+      const [cx, cy] = compactWindow.getPosition()
+      const [cw] = compactWindow.getSize()
+      compactWindow.setSize(width, height)
+      compactWindow.setPosition(Math.round(cx + (cw - width) / 2), cy)
+    }
+  })
+
   // Compact mode IPC
   ipcMain.handle('set-window-mode', (_event, mode: 'library' | 'compact') => {
     if (mode === 'compact') {

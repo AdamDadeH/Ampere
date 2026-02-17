@@ -89,6 +89,11 @@ interface LibraryState {
   shuffle: boolean
   repeatMode: 'off' | 'one' | 'all'
 
+  // EQ
+  eqEnabled: boolean
+  eqPreamp: number
+  eqBands: number[]
+
   // Scan
   scanProgress: ScanProgress | null
   isScanning: boolean
@@ -114,6 +119,9 @@ interface LibraryState {
   stopPlayback: () => void
   updatePlayCount: (trackId: string) => void
   setRating: (trackId: string, rating: number) => Promise<void>
+  setEqEnabled: (enabled: boolean) => void
+  setEqPreamp: (gain: number) => void
+  setEqBand: (index: number, gain: number) => void
   setScanProgress: (progress: ScanProgress | null) => void
 }
 
@@ -138,6 +146,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   seekTarget: null,
   shuffle: false,
   repeatMode: 'off',
+  eqEnabled: false,
+  eqPreamp: 0,
+  eqBands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   scanProgress: null,
   isScanning: false,
 
@@ -301,6 +312,29 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }))
   },
 
+  setEqEnabled: (enabled) => {
+    set({ eqEnabled: enabled })
+    localStorage.setItem('proton-eq-state', JSON.stringify({
+      enabled, preamp: get().eqPreamp, bands: get().eqBands,
+    }))
+  },
+
+  setEqPreamp: (gain) => {
+    set({ eqPreamp: gain })
+    localStorage.setItem('proton-eq-state', JSON.stringify({
+      enabled: get().eqEnabled, preamp: gain, bands: get().eqBands,
+    }))
+  },
+
+  setEqBand: (index, gain) => {
+    const bands = [...get().eqBands]
+    bands[index] = gain
+    set({ eqBands: bands })
+    localStorage.setItem('proton-eq-state', JSON.stringify({
+      enabled: get().eqEnabled, preamp: get().eqPreamp, bands,
+    }))
+  },
+
   setScanProgress: (progress) => {
     set({
       scanProgress: progress,
@@ -311,3 +345,18 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }
   }
 }))
+
+// Restore saved EQ state
+try {
+  const savedEq = localStorage.getItem('proton-eq-state')
+  if (savedEq) {
+    const eq = JSON.parse(savedEq) as { enabled: boolean; preamp: number; bands: number[] }
+    useLibraryStore.setState({
+      eqEnabled: eq.enabled,
+      eqPreamp: eq.preamp,
+      eqBands: eq.bands,
+    })
+  }
+} catch {
+  // ignore corrupted EQ state
+}

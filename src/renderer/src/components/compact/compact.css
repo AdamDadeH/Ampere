@@ -243,6 +243,63 @@
   border-radius: 1px;
 }
 
+/* --- Sprite rendering (Winamp .wsz skins) --- */
+.compact-sprite {
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  background-repeat: no-repeat;
+}
+
+.compact-sprite-btn {
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  background-color: transparent;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  background-repeat: no-repeat;
+}
+
+.compact-sprite-btn:focus-visible {
+  outline: 1px solid rgba(255,255,255,0.5);
+  outline-offset: 1px;
+}
+
+/* ============================================================
+   CLASSIC WINAMP LAYOUT (275x116 at 2x scale)
+   ============================================================ */
+
+.classic-winamp-outer {
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  overflow: hidden;
+  user-select: none;
+}
+
+.classic-titlebar-drag {
+  -webkit-app-region: drag;
+}
+
+.classic-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.classic-eq-slider-track {
+  cursor: pointer;
+}
+
+.classic-playlist-row {
+  padding: 0 4px;
+  cursor: pointer;
+  line-height: 13px;
+  font-size: 8px;
+  font-family: 'Tahoma', 'Arial', sans-serif;
+}
+
+.classic-playlist-row:hover {
+  filter: brightness(1.2);
+}
+
 /* ============================================================
    EASTER EGG — animations use CSS custom properties set inline
    ============================================================ */

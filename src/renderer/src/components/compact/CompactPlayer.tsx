@@ -4,6 +4,7 @@ import { CompactLCD } from './CompactLCD'
 import { CompactTransport } from './CompactTransport'
 import { CompactSeekBar } from './CompactSeekBar'
 import { CompactVolume } from './CompactVolume'
+import { ClassicWinampLayout } from './ClassicWinampLayout'
 import { useCompactSkin, useThemeStore } from '../../stores/theme'
 import { importWszSkin } from '../../themes'
 import type { PlayerState } from '../../../../../preload/index'
@@ -25,7 +26,11 @@ const initialState: PlayerState = {
   queueLength: 0,
   shuffle: false,
   repeatMode: 'off',
-  frequencyData: []
+  frequencyData: [],
+  eqEnabled: false,
+  eqPreamp: 0,
+  eqBands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  queueTracks: [],
 }
 
 const KONAMI = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','b','a']
@@ -114,6 +119,60 @@ export function CompactPlayer(): React.JSX.Element {
       window.removeEventListener('keydown', handleKey)
     }
   }, [contextMenu])
+
+  const hasSprites = !!skin.sprites?.mainBmp
+
+  // Restore Ampere size when sprites are cleared
+  useEffect(() => {
+    if (!hasSprites) window.api.setCompactSize(400, 150)
+  }, [hasSprites])
+
+  // Classic Winamp layout when sprites are loaded
+  if (hasSprites) {
+    return (
+      <div onContextMenu={handleContextMenu}>
+        <ClassicWinampLayout skin={skin} state={state} sendCommand={sendCommand} />
+        {contextMenu && (
+          <div
+            style={{
+              position: 'fixed',
+              left: contextMenu.x,
+              top: contextMenu.y,
+              background: 'linear-gradient(180deg, #3a3a3e 0%, #2a2a2e 100%)',
+              border: '1px solid #555',
+              borderRadius: '4px',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+              zIndex: 9999,
+              padding: '4px 0',
+              minWidth: '180px',
+              fontFamily: "'Tahoma', 'Arial', sans-serif",
+              fontSize: '12px',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{ padding: '6px 14px', color: '#e0e0e0', cursor: 'pointer' }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.1)' }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}
+              onClick={handleLoadSkin}
+            >
+              Load Winamp Skin...
+            </div>
+            {hasCustomSkin && (
+              <div
+                style={{ padding: '6px 14px', color: '#e0e0e0', cursor: 'pointer' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.1)' }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}
+                onClick={handleClearSkin}
+              >
+                Clear Custom Skin
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   const shellStyle: React.CSSProperties = {
     background: skin.shell.background,

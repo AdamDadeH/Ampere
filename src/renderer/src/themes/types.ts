@@ -61,7 +61,32 @@ export interface CompactSkinSeed {
   displayBackground?: string
 }
 
+export interface WinampSprites {
+  mainBmp?: string
+  cButtonsBmp?: string
+  titlebarBmp?: string
+  posbarBmp?: string
+  volumeBmp?: string
+  shufrepBmp?: string
+  monosterBmp?: string
+  playpausBmp?: string
+  numbersBmp?: string
+  textBmp?: string
+  eqmainBmp?: string
+  pleditBmp?: string
+  balanceBmp?: string
+}
+
+export interface PleditColors {
+  normal: string
+  current: string
+  normBg: string
+  selectBg: string
+}
+
 export interface CompactSkin {
+  sprites?: WinampSprites
+  pleditColors?: PleditColors
   shell: {
     background: string
     borderTop: string
