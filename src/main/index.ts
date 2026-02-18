@@ -297,6 +297,22 @@ function setupIPC(): void {
     win?.close()
   })
 
+  // Riemann feature extraction IPC
+  ipcMain.handle('get-tracks-without-features', () => db.getTracksWithoutFeatures())
+  ipcMain.handle('upsert-track-features', (_event, trackId: string, featuresJson: string) => {
+    db.upsertTrackFeatures(trackId, featuresJson)
+  })
+  ipcMain.handle('get-track-features', () => db.getTrackFeatures())
+  ipcMain.handle('get-track-features-with-coords', () => db.getTrackFeaturesWithCoords())
+  ipcMain.handle('bulk-set-umap-coords', (_event, coords: { trackId: string; x: number; y: number; z: number }[]) => {
+    db.bulkSetUmapCoords(coords)
+  })
+  ipcMain.handle('get-feature-count', () => db.getFeatureCount())
+  ipcMain.handle('read-audio-file', (_event, filePath: string) => {
+    const data = readFileSync(filePath)
+    return data.buffer
+  })
+
   ipcMain.on('remote-player-command', (_event, command: string, ...args: unknown[]) => {
     // Forward from compact window to library window
     if (mainWindow && !mainWindow.isDestroyed()) {

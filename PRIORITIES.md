@@ -176,38 +176,128 @@ This is the other priority because it makes the player actually usable day-to-da
 
 These aren't features. They're a thesis: **your music library has a shape, and you should be able to walk through it.**
 
-Riemann is the module that computes audio embeddings, builds the manifold, renders the navigator, and hands tracks back to Ampere for playback. It can live as a view within the app or as a standalone full-screen experience.
+Riemann is the module that computes audio embeddings, builds the manifold, renders the navigator, and hands tracks back to Ampere for playback. It lives as a view within the library window.
 
-### The Navigator — 3D Audio-Reactive Library Map
+### What's Built (v1)
 
-Your library is a universe. Every track is a point in 3D space, positioned by its acoustic DNA — spectral profile, tempo, energy, harmonic content. Similar tracks cluster into constellations. Genres form galaxies.
+The MVP is shipped and working. The foundation is solid enough to build everything below on.
 
-**The experience:**
-- **Zoomed out** — nebulae of clusters. Each hums with a composite audio signature — the spectral average of its tracks. You *hear the topology* before you see individual songs. The ambient drone of your shoegaze region. The rhythmic pulse from hip-hop. The bright shimmer of your jazz corner.
-- **Flying closer** — the cluster resolves into individual points. The composite fades. The most-played tracks in the neighborhood become audible in spatial audio (Web Audio `PannerNode` with HRTF), panned in 3D based on their position relative to your camera.
-- **Close approach** — a single track grows louder. Cross its threshold and it becomes the active track — full playback, full fidelity. Surrounding geometry reacts. Neighboring tracks pulse gently, showing where you could go next.
-- **The trail** — your listening history traces a glowing path through the space. Over weeks, you see your patterns — the routes you take, the regions you return to, the unexplored territories at the edges.
+**Feature extraction pipeline:**
+- Meyda-based audio analysis — decodes each track at 22050Hz mono, slides 2048-sample frames with 1024 hop
+- 56-dimensional feature vector per track: spectral centroid (2), 13 MFCCs (26), RMS energy (2), 12 chroma bins (24), ZCR (2) — all mean+stddev
+- Zero metadata involvement. No genre tags, no artist names. Pure audio signal DNA.
+- Incremental — only processes unanalyzed tracks. Survives restarts.
 
-**The aesthetic:** Nier Automata's hacking scenes meets REZ — black void, glowing geometric nodes, the camera pulling through space, everything pulsing and alive. The darkness between the nodes matters as much as the nodes themselves. Wireframe geometry, particle systems, bloom and glow. Not a visualization bolted onto a player — the player *is* the visualization.
+**UMAP projection:**
+- Z-score normalization → UMAP embedding to 3D (or 2D flat plane)
+- Configurable layout panel: Flat/Spatial toggle, dispersion slider (minDist 0.01→1.5), spread slider (0.5→5.0), one-click reproject
+- ~30-60s for thousands of tracks. Features don't need re-extraction.
 
-**Technical architecture:**
-- Audio feature extraction: spectral centroid, MFCCs, tempo, RMS energy, chromagram — via Essentia.js or lightweight ONNX model running locally
-- Dimensionality reduction: UMAP projecting high-dimensional audio features into 3D coordinates (better than t-SNE for preserving global structure)
-- Rendering: Three.js with instanced meshes for thousands of track particles, bloom post-processing, wireframe aesthetic
-- Spatial audio: Web Audio `PannerNode` for 3D positioning, distance-based gain rolloff
-- LOD audio: zoomed-out clusters play a "spectral summary" (average FFT of member tracks rendered as noise-shaped drone), zooming in crossfades to actual tracks
-- Interaction: WASD/gamepad flight, mouse look, scroll to zoom, click to play
+**Three.js renderer (Nier/REZ aesthetic):**
+- InstancedMesh for all track nodes — single draw call
+- UnrealBloomPass post-processing — glowing cyan nodes in black void
+- OrbitControls for rotate/zoom + WASD/QE fly controls for full 6DOF navigation
+- Raycaster: hover tooltips (track title + artist), click to play
+- Camera lerp on track selection — smooth approach, not jarring snap
+- Currently-playing node: white color + sin-wave scale pulse
+- Responsive canvas via ResizeObserver
+
+**Drift mode (KNN walk):**
+- Precomputed k=8 nearest neighbors in the 56-dim feature space (not UMAP space — real distances)
+- Toggle on/off from the scene. When active, track completion walks to nearest unvisited neighbor instead of next-in-queue.
+- Green trajectory line traces your path through the 3D scene — you can see where you've been
+- Camera follows each transition with smooth lerp
+- Store-level `driftNext` override — generic hook that any navigation mode can use
+
+**Partial map support:**
+- Stop extraction early → UMAP runs on whatever's done → see partial map
+- "Continue Analysis" resumes from where you left off
+- "View Map" jumps straight to scene when coords already exist
+
+**Data layer:**
+- `track_features` table: `track_id`, `features_json`, `umap_x/y/z`, `computed_at`
+- Derived table — can be fully recomputed from audio files at any time
+- 7 IPC handlers bridging main↔renderer for all feature/coord CRUD
+- `navigation.ts` module: KNN computation, drift state, extensible for future modes
+
+### Next: Navigation Modes on the Manifold
+
+The KNN drift walk is the first navigation mode. The architecture supports many more — all operating on the same 56-dim feature space, all togglable, no state lost switching between them.
+
+**Directed Walk ("More Bass" / "Brighter" / "Calmer")**
+
+The 56 dimensions aren't opaque — we know exactly what each one means. Define semantic direction vectors:
+- "Heavier" → increase RMS mean, decrease spectral centroid mean
+- "Brighter" → increase spectral centroid mean, increase ZCR mean
+- "Calmer" → decrease RMS mean, decrease ZCR mean
+- "Darker" → decrease spectral centroid mean, shift MFCC profile
+- "Warmer" → specific MFCC shifts associated with fuller low-mid spectrum
+
+"Next track along this direction" = find the nearest neighbor whose feature delta aligns with the chosen direction vector. Button magnitude controls step size — "more bass" vs "MORE BASS" is search radius.
+
+The UI: directional buttons or a 2D pad (joystick metaphor) where axes map to interpretable feature directions. The trajectory line shows your path — you'd literally see yourself moving toward a region.
+
+**Semantic Graph Navigation**
+
+Build a fixed-valence graph (4-6 edges per node) where each edge is labeled by the dominant feature axis of the difference. The edges self-organize: "this neighbor is brighter," "this one is heavier," "this one shares chroma profile." The buttons label themselves. Every track becomes an intersection with named roads.
+
+Could render the graph edges as visible lines in the 3D scene — see the neighborhood topology around the current track.
+
+**2D Surface Eigenvector Navigation**
+
+For flat (2D) projections: compute local principal directions at each point on the manifold. Four navigation buttons corresponding to the two eigenvectors (±). "Walk east" vs "walk north" on the surface — but east/north mean different things at different positions because the manifold is curved. This gives the most geometric, least feature-explicit navigation — pure "move through the space."
+
+**Orbit Mode**
+
+Instead of walking to a neighbor, orbit around the current track at increasing radii. "Show me what's nearby" → "show me what's a bit further" → "show me what's distant." Concentric exploration. Good for discovering the neighborhood structure.
+
+**Mood Trajectory / Path Planning**
+
+Define a mood curve: "start mellow, build energy, peak, cool down." The system finds the optimal path through the graph that matches that energy arc. Playlist generation as geodesic computation on the manifold.
+
+Could be interactive: draw a path on the 2D projection, and the system snaps it to actual tracks.
+
+### Spatial Audio (LOD Listening)
+
+The original vision of *hearing the topology*:
+
+- **Zoomed out** — clusters hum with a composite audio signature (spectral average of member tracks, rendered as noise-shaped drone via Web Audio OscillatorNode + BiquadFilters)
+- **Flying closer** — the composite fades, individual tracks become audible via `PannerNode` with HRTF, 3D-positioned relative to camera
+- **Close approach** — a single track dominates. Cross its threshold and it becomes the active track.
+- **Distance-based gain rolloff** — Web Audio's inverse distance model
+
+This turns the navigator from a visual browser into an auditory landscape. You hear the map.
 
 ### Content-Informed Recommendations
 
-Not collaborative filtering ("people who liked X liked Y"). Not metadata matching ("same genre tag"). **Acoustic similarity** — what does the music actually *sound like?*
+Not collaborative filtering. Not metadata matching. **Acoustic similarity** — what does the music actually *sound like?*
 
-- Extract per-track audio embeddings from the raw waveform (spectral features, rhythm patterns, harmonic structure, timbre fingerprint)
-- Build a similarity graph: every track connected to its K nearest neighbors in embedding space
-- Playlist generation as *path planning through the graph*: define a mood trajectory ("start mellow, build energy, peak, cool down") and find the optimal route
-- The EQ settings you save are implicit taste signal — if you boost bass on certain tracks, you prefer warmth in that region of the space
-- Listening patterns as gravity: frequently-played tracks warp the space around them, pulling recommendations toward your actual taste rather than algorithmic assumptions
+- The KNN graph already exists. Recommendations = graph traversal.
+- Playlist generation as *path planning through the graph*: define a mood trajectory and find the optimal route
+- EQ settings as implicit taste signal — if you boost bass on certain tracks, you prefer warmth in that region of the space
+- Listening patterns as gravity: frequently-played tracks warp the space around them, pulling recommendations toward your actual taste
 - All local. No cloud. Your embeddings, your graph, your data.
+
+### Richer Feature Extraction
+
+The current 56-dim vector captures timbre and energy well. Future features that would improve the manifold:
+
+- **Tempo/BPM** — via onset detection or autocorrelation. Critical for rhythm-based clustering.
+- **Key detection** — from the chroma features we already extract. Harmonic compatibility becomes navigable.
+- **Onset density / rhythmic complexity** — how busy is the track? Separates ambient from breakcore.
+- **Spectral flux** — rate of spectral change. Separates static drones from evolving compositions.
+- **Dynamic range** — compressed pop vs dynamic classical. The stddev of RMS captures some of this, but explicit measurement is better.
+- **Segment-level features** — instead of whole-track mean+std, extract features per segment (intro/verse/chorus/bridge). Enables "tracks that have a similar build" matching.
+- **Learned embeddings** — run a pre-trained audio model (e.g., CLAP, MusicNN) for higher-level semantic features. Heavier, but captures "vibe" in ways handcrafted features can't.
+
+### Visual Enhancements
+
+- **Cluster labels** — auto-detect clusters (DBSCAN/HDBSCAN on features) and render floating labels ("High Energy," "Ambient," "String-Heavy")
+- **Node sizing** — scale by play count, rating, or recency. Your favorites are physically larger.
+- **Heat map overlay** — color nodes by listening frequency. See which regions you've explored and which remain uncharted.
+- **History trails** — persistent trail rendering across sessions. Over weeks, see your movement patterns.
+- **Edge rendering** — optionally show KNN graph edges as thin lines. See the topology.
+- **Region fog** — unexplored areas are dimmer/foggier. Explored regions glow brighter. Incentivizes exploration.
 
 ### Demoscene Visualization Engine
 
@@ -282,6 +372,7 @@ The original PRD envisioned a cloud-first Proton Drive music manager. The app ha
 - 8 built-in themes + Winamp .wsz skin import
 - Artist/album sidebar browsing
 - Search functionality
+- **Riemann Navigator v1** — 56-dim audio feature extraction (Meyda), UMAP 2D/3D projection, Three.js renderer with bloom, WASD fly controls, click-to-play, configurable layout (flat/spatial, dispersion, spread), KNN drift walk with trajectory visualization
 
 ### Still Relevant (captured in priorities above)
 - **Playlists** (P2) — create, rename, delete, drag-and-drop

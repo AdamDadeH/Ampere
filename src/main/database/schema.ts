@@ -82,6 +82,16 @@ CREATE TABLE IF NOT EXISTS track_album_artists (
   FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_track_album_artists_artist_name ON track_album_artists(artist_name);
+
+CREATE TABLE IF NOT EXISTS track_features (
+  track_id TEXT PRIMARY KEY,
+  features_json TEXT NOT NULL,
+  umap_x REAL,
+  umap_y REAL,
+  umap_z REAL,
+  computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+);
 `
 
 // Bump this when derived tables (track_artists, track_album_artists) need rebuilding.

@@ -59,7 +59,7 @@ export interface LibraryStats {
   total_duration: number
 }
 
-type View = 'all-tracks' | 'artists' | 'albums' | 'artist-detail' | 'album-detail'
+type View = 'all-tracks' | 'artists' | 'albums' | 'artist-detail' | 'album-detail' | 'riemann'
 type ArtistViewMode = 'track' | 'album'
 
 interface LibraryState {
@@ -98,6 +98,9 @@ interface LibraryState {
   scanProgress: ScanProgress | null
   isScanning: boolean
 
+  // Navigation override — set by Riemann navigator for drift/walk modes
+  driftNext: (() => void) | null
+
   // Actions
   loadLibrary: () => Promise<void>
   selectFolder: () => Promise<void>
@@ -123,6 +126,7 @@ interface LibraryState {
   setEqPreamp: (gain: number) => void
   setEqBand: (index: number, gain: number) => void
   setScanProgress: (progress: ScanProgress | null) => void
+  setDriftNext: (fn: (() => void) | null) => void
 }
 
 export const useLibraryStore = create<LibraryState>((set, get) => ({
@@ -151,6 +155,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   eqBands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   scanProgress: null,
   isScanning: false,
+  driftNext: null,
 
   loadLibrary: async () => {
     const [tracks, artists, albumArtists, albums, stats] = await Promise.all([
@@ -234,7 +239,11 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
 
   nextTrack: () => {
-    const { queue, queueIndex, shuffle } = get()
+    const { queue, queueIndex, shuffle, driftNext } = get()
+    if (driftNext) {
+      driftNext()
+      return
+    }
     if (queue.length === 0) return
     let nextIndex: number
     if (shuffle) {
@@ -343,7 +352,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     if (progress?.phase === 'complete') {
       get().loadLibrary()
     }
-  }
+  },
+
+  setDriftNext: (fn) => set({ driftNext: fn })
 }))
 
 // Restore saved EQ state
