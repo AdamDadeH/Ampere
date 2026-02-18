@@ -1,5 +1,8 @@
 import { useLibraryStore } from '../stores/library'
 import { ThemePicker } from './ThemePicker'
+import { musicAdapter } from '../../../shared/adapters/music'
+
+const adapter = musicAdapter
 
 export function Sidebar(): React.JSX.Element {
   const {
@@ -7,7 +10,21 @@ export function Sidebar(): React.JSX.Element {
     setView, setArtistViewMode, selectArtist, selectFolder, isScanning, scanProgress
   } = useLibraryStore()
 
-  const displayedArtists = artistViewMode === 'album' ? albumArtists : artists
+  // Build entity toggle from adapter config
+  const entities = adapter.entities
+  const hasMultipleEntities = entities.length > 1
+
+  // Map entity key to data source
+  const getEntityList = (entityKey: string): { artist: string; track_count: number }[] => {
+    if (entityKey === 'album_artist') return albumArtists
+    if (entityKey === 'artist') return artists
+    return []
+  }
+
+  // Current entity selection: first entity = 'album' mode, second = 'track' mode
+  const displayedArtists = artistViewMode === 'album'
+    ? getEntityList(entities[0]?.key || 'album_artist')
+    : getEntityList(entities[1]?.key || 'artist')
 
   return (
     <div className="w-56 bg-bg-secondary border-r border-border-primary flex flex-col h-full">
@@ -25,7 +42,7 @@ export function Sidebar(): React.JSX.Element {
               : 'text-text-faint hover:text-text-primary hover:bg-bg-tertiary/60'
           }`}
         >
-          All Tracks
+          All {adapter.label}
         </button>
         <button
           onClick={() => setView('albums')}
@@ -49,27 +66,31 @@ export function Sidebar(): React.JSX.Element {
         </button>
       </nav>
 
-      {/* Artists */}
+      {/* Entities */}
       <div className="flex-1 overflow-y-auto px-3">
-        <div className="flex items-center gap-1 px-2 mb-1">
-          <button
-            onClick={() => setArtistViewMode('album')}
-            className={`text-[11px] font-semibold uppercase tracking-wider cursor-pointer transition-colors ${
-              artistViewMode === 'album' ? 'text-text-primary' : 'text-text-muted hover:text-text-secondary'
-            }`}
-          >
-            Album Artists
-          </button>
-          <span className="text-[11px] text-text-muted">/</span>
-          <button
-            onClick={() => setArtistViewMode('track')}
-            className={`text-[11px] font-semibold uppercase tracking-wider cursor-pointer transition-colors ${
-              artistViewMode === 'track' ? 'text-text-primary' : 'text-text-muted hover:text-text-secondary'
-            }`}
-          >
-            Track Artists
-          </button>
-        </div>
+        {hasMultipleEntities ? (
+          <div className="flex items-center gap-1 px-2 mb-1">
+            {entities.map((entity, i) => (
+              <span key={entity.key} className="contents">
+                {i > 0 && <span className="text-[11px] text-text-muted">/</span>}
+                <button
+                  onClick={() => setArtistViewMode(i === 0 ? 'album' : 'track')}
+                  className={`text-[11px] font-semibold uppercase tracking-wider cursor-pointer transition-colors ${
+                    (i === 0 && artistViewMode === 'album') || (i === 1 && artistViewMode === 'track')
+                      ? 'text-text-primary'
+                      : 'text-text-muted hover:text-text-secondary'
+                  }`}
+                >
+                  {entity.label}
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : entities.length === 1 ? (
+          <p className="text-[11px] font-semibold text-text-muted uppercase tracking-wider px-2 mb-1">
+            {entities[0].label}
+          </p>
+        ) : null}
         <div className="space-y-0.5">
           {displayedArtists.map(a => (
             <button
@@ -105,7 +126,7 @@ export function Sidebar(): React.JSX.Element {
         >
           {isScanning
             ? `Scanning... ${scanProgress?.current || 0}/${scanProgress?.total || '?'}`
-            : 'Add Music Folder'}
+            : `Add ${adapter.label} Folder`}
         </button>
       </div>
     </div>

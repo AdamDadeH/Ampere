@@ -12,6 +12,5 @@ export interface StorageProvider {
   getLocalPath(filePath: string): string | null
 }
 
-export const AUDIO_EXTENSIONS = new Set([
-  '.mp3', '.flac', '.m4a', '.ogg', '.wav', '.aac', '.wma', '.opus', '.aiff', '.alac'
-])
+// Re-export from canonical location for backward compatibility
+export { AUDIO_EXTENSIONS } from '../../shared/adapters/music'

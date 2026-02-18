@@ -7,7 +7,7 @@ export interface ProjectionResult {
   z: number
 }
 
-function zScoreNormalize(data: number[][]): number[][] {
+export function zScoreNormalize(data: number[][]): number[][] {
   if (data.length === 0) return data
   const dims = data[0].length
   const means = new Float64Array(dims)

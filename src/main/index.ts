@@ -5,7 +5,9 @@ import { createReadStream, readFileSync, statSync } from 'fs'
 import { createServer, Server } from 'http'
 import { LibraryDatabase } from './database'
 import { LocalStorageProvider } from './storage/local-provider'
+import { AUDIO_EXTENSIONS } from './storage/provider'
 import { FolderScanner } from './scanner'
+import { MusicMetadataExtractor } from './scanner/music-extractor'
 
 const MIME_TYPES: Record<string, string> = {
   '.mp3': 'audio/mpeg',
@@ -342,8 +344,9 @@ app.whenReady().then(async () => {
   audioServerPort = await startAudioServer()
 
   db = new LibraryDatabase()
-  const provider = new LocalStorageProvider()
-  scanner = new FolderScanner(db, provider)
+  const provider = new LocalStorageProvider(AUDIO_EXTENSIONS)
+  const extractor = new MusicMetadataExtractor()
+  scanner = new FolderScanner(db, provider, extractor)
 
   setupIPC()
   createWindow()

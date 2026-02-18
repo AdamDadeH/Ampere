@@ -136,3 +136,96 @@ export function driftNext(state: DriftState, knn: KNNGraph, currentTrackId: stri
   state.trajectory.push(next)
   return next
 }
+
+// ── KNN Picker with semantic labels ──────────────────────────────────
+
+export interface LabeledNeighbor {
+  trackId: string
+  label: string
+  group: string
+  delta: number // signed: positive = more of the quality
+}
+
+import type { FeatureGroup } from '../../../shared/media-adapter'
+import { MUSIC_FEATURE_GROUPS } from '../../../shared/adapters/music'
+
+/**
+ * Default feature groups — used when no groups are explicitly provided.
+ * Re-exported from the music adapter for backward compatibility.
+ */
+export const FEATURE_GROUPS = MUSIC_FEATURE_GROUPS
+
+/**
+ * Label each neighbor with its dominant feature difference from the current track.
+ * Uses z-score normalization across the full library so all feature dimensions
+ * are weighted equally regardless of their raw scale.
+ *
+ * @param featureGroups - If omitted, uses the default music feature groups
+ */
+export function labelNeighbors(
+  currentTrackId: string,
+  neighborIds: string[],
+  featureMap: Map<string, number[]>,
+  featureGroups: FeatureGroup[] = FEATURE_GROUPS
+): LabeledNeighbor[] {
+  const currentVec = featureMap.get(currentTrackId)
+  if (!currentVec) return []
+
+  const dims = currentVec.length
+  const allVecs = Array.from(featureMap.values())
+  const n = allVecs.length
+  if (n < 2) return []
+
+  // Global z-score normalization stats
+  const means = new Float64Array(dims)
+  const stds = new Float64Array(dims)
+
+  for (const vec of allVecs) {
+    for (let d = 0; d < dims; d++) means[d] += vec[d]
+  }
+  for (let d = 0; d < dims; d++) means[d] /= n
+
+  for (const vec of allVecs) {
+    for (let d = 0; d < dims; d++) {
+      const diff = vec[d] - means[d]
+      stds[d] += diff * diff
+    }
+  }
+  for (let d = 0; d < dims; d++) {
+    stds[d] = Math.sqrt(stds[d] / n)
+    if (stds[d] === 0) stds[d] = 1
+  }
+
+  const normCurrent = currentVec.map((v, d) => (v - means[d]) / stds[d])
+
+  return neighborIds.map(nId => {
+    const neighborVec = featureMap.get(nId)
+    if (!neighborVec) return { trackId: nId, label: '?', group: 'unknown', delta: 0 }
+
+    const normNeighbor = neighborVec.map((v, d) => (v - means[d]) / stds[d])
+
+    let bestGroup = featureGroups[0]
+    let bestAbsDelta = 0
+    let bestSignedDelta = 0
+
+    for (const group of featureGroups) {
+      let sum = 0
+      for (let d = group.start; d < group.end; d++) {
+        sum += normNeighbor[d] - normCurrent[d]
+      }
+      const meanDelta = sum / (group.end - group.start)
+      if (Math.abs(meanDelta) > bestAbsDelta) {
+        bestAbsDelta = Math.abs(meanDelta)
+        bestSignedDelta = meanDelta
+        bestGroup = group
+      }
+    }
+
+    return {
+      trackId: nId,
+      label: bestSignedDelta >= 0 ? bestGroup.pos : bestGroup.neg,
+      group: bestGroup.name,
+      delta: bestSignedDelta
+    }
+  })
+}

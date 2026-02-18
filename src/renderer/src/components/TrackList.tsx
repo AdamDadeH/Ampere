@@ -1,6 +1,10 @@
 import React from 'react'
 import { useLibraryStore, Track } from '../stores/library'
 import { AlbumArt } from './AlbumArt'
+import { musicAdapter } from '../../../shared/adapters/music'
+import type { ColumnDef } from '../../../shared/media-adapter'
+
+const adapter = musicAdapter
 
 function formatDuration(seconds: number): string {
   const mins = Math.floor(seconds / 60)
@@ -20,8 +24,11 @@ export function TrackList(): React.JSX.Element {
     if (currentView === 'artist-detail' && selectedArtist) return selectedArtist
     if (currentView === 'album-detail' && selectedAlbum) return selectedAlbum
     if (currentView === 'albums') return 'Albums'
-    return 'All Tracks'
+    return `All ${adapter.label}`
   })()
+
+  // Filter columns: title is rendered specially (with artwork), rating has a custom renderer
+  const columns = adapter.columns
 
   return (
     <div className="flex-1 flex flex-col h-full">
@@ -64,13 +71,17 @@ export function TrackList(): React.JSX.Element {
           <table className="w-full text-sm min-w-[800px]">
             <thead className="sticky top-0 bg-bg-primary z-10">
               <tr className="text-text-muted text-left border-b border-border-primary">
-                <th className="py-2 pr-3 font-medium">#</th>
-                <th className="py-2 pr-3 font-medium">Title</th>
-                <th className="py-2 pr-3 font-medium">Artist</th>
-                <th className="py-2 pr-3 font-medium">Album</th>
-                <th className="py-2 pr-3 font-medium text-right">Time</th>
-                <th className="py-2 pr-3 font-medium text-center">Rating</th>
-                <th className="py-2 font-medium text-right">Plays</th>
+                {columns.map(col => (
+                  <th
+                    key={col.key}
+                    className={`py-2 ${col.key === columns[columns.length - 1].key ? '' : 'pr-3'} font-medium ${
+                      col.align === 'right' ? 'text-right' :
+                      col.align === 'center' ? 'text-center' : ''
+                    }`}
+                  >
+                    {col.label}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -79,6 +90,7 @@ export function TrackList(): React.JSX.Element {
                   key={track.id}
                   track={track}
                   index={i}
+                  columns={columns}
                   isCurrentTrack={currentTrack?.id === track.id}
                   isPlaying={isPlaying && currentTrack?.id === track.id}
                   onPlay={() => playTrack(track, tracks)}
@@ -98,10 +110,11 @@ export function TrackList(): React.JSX.Element {
 }
 
 function TrackRow({
-  track, index, isCurrentTrack, isPlaying, onPlay
+  track, index, columns, isCurrentTrack, isPlaying, onPlay
 }: {
   track: Track
   index: number
+  columns: ColumnDef[]
   isCurrentTrack: boolean
   isPlaying: boolean
   onPlay: () => void
@@ -115,40 +128,89 @@ function TrackRow({
       }`}
       onDoubleClick={onPlay}
     >
-      <td className="py-2 pr-3">
-        <div className="relative w-6 h-6 flex items-center justify-center">
-          <span className="group-hover:hidden text-text-muted text-xs">
-            {isCurrentTrack && isPlaying ? (
-              <span className="text-accent-text text-xs">&#9654;</span>
-            ) : (
-              index + 1
-            )}
-          </span>
-          <button
-            className="hidden group-hover:flex items-center justify-center text-text-primary cursor-pointer"
-            onClick={onPlay}
-          >
-            &#9654;
-          </button>
-        </div>
-      </td>
-      <td className="py-2 pr-3 overflow-hidden">
-        <div className="flex items-center gap-3">
-          <AlbumArt artworkPath={track.artwork_path} size={36} />
-          <span className={`truncate ${isCurrentTrack ? 'text-accent-text font-medium' : 'text-text-primary'}`}>
-            {track.title || track.file_name}
-          </span>
-        </div>
-      </td>
-      <td className="py-2 pr-3 truncate">{track.artist || 'Unknown'}</td>
-      <td className="py-2 pr-3 truncate">{track.album || 'Unknown'}</td>
-      <td className="py-2 pr-3 text-right text-text-muted">{formatDuration(track.duration)}</td>
-      <td className="py-2 pr-3 text-center">
-        <StarRatingInline trackId={track.id} rating={track.rating} />
-      </td>
-      <td className="py-2 w-12 text-right text-text-muted">{track.play_count > 0 ? track.play_count : ''}</td>
+      {columns.map(col => (
+        <td
+          key={col.key}
+          className={`py-2 ${col.key === columns[columns.length - 1].key ? 'w-12' : 'pr-3'} ${
+            col.align === 'right' ? 'text-right text-text-muted' :
+            col.align === 'center' ? 'text-center' :
+            col.key === 'title' ? 'overflow-hidden' : 'truncate'
+          }`}
+        >
+          <CellContent
+            col={col}
+            track={track}
+            index={index}
+            isCurrentTrack={isCurrentTrack}
+            isPlaying={isPlaying}
+            onPlay={onPlay}
+          />
+        </td>
+      ))}
     </tr>
   )
+}
+
+function CellContent({
+  col, track, index, isCurrentTrack, isPlaying, onPlay
+}: {
+  col: ColumnDef
+  track: Track
+  index: number
+  isCurrentTrack: boolean
+  isPlaying: boolean
+  onPlay: () => void
+}): React.JSX.Element {
+  const value = (track as Record<string, unknown>)[col.key]
+
+  // Special renderers for known column types
+  if (col.key === 'track_number') {
+    return (
+      <div className="relative w-6 h-6 flex items-center justify-center">
+        <span className="group-hover:hidden text-text-muted text-xs">
+          {isCurrentTrack && isPlaying ? (
+            <span className="text-accent-text text-xs">&#9654;</span>
+          ) : (
+            index + 1
+          )}
+        </span>
+        <button
+          className="hidden group-hover:flex items-center justify-center text-text-primary cursor-pointer"
+          onClick={onPlay}
+        >
+          &#9654;
+        </button>
+      </div>
+    )
+  }
+
+  if (col.key === 'title') {
+    return (
+      <div className="flex items-center gap-3">
+        <AlbumArt artworkPath={track.artwork_path} size={36} />
+        <span className={`truncate ${isCurrentTrack ? 'text-accent-text font-medium' : 'text-text-primary'}`}>
+          {(value as string) || track.file_name}
+        </span>
+      </div>
+    )
+  }
+
+  if (col.key === 'rating') {
+    return <StarRatingInline trackId={track.id} rating={track.rating} />
+  }
+
+  if (col.key === 'play_count') {
+    const count = value as number
+    return <>{count > 0 ? count : ''}</>
+  }
+
+  // Use custom formatter if provided
+  if (col.format) {
+    return <>{col.format(value)}</>
+  }
+
+  // Default: render as string
+  return <>{(value as string) || (col.key === 'artist' || col.key === 'album' ? 'Unknown' : '')}</>
 }
 
 function StarRatingInline({ trackId, rating }: { trackId: string; rating: number }): React.JSX.Element {
