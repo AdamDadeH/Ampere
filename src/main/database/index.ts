@@ -465,6 +465,53 @@ export class LibraryDatabase {
     return row?.id ?? null
   }
 
+  upsertTrackFeatures(trackId: string, featuresJson: string): void {
+    this.db.prepare(
+      'INSERT OR REPLACE INTO track_features (track_id, features_json) VALUES (?, ?)'
+    ).run(trackId, featuresJson)
+  }
+
+  setUmapCoords(trackId: string, x: number, y: number, z: number): void {
+    this.db.prepare(
+      'UPDATE track_features SET umap_x = ?, umap_y = ?, umap_z = ? WHERE track_id = ?'
+    ).run(x, y, z, trackId)
+  }
+
+  bulkSetUmapCoords(coords: { trackId: string; x: number; y: number; z: number }[]): void {
+    const stmt = this.db.prepare(
+      'UPDATE track_features SET umap_x = ?, umap_y = ?, umap_z = ? WHERE track_id = ?'
+    )
+    const transaction = this.db.transaction((items: typeof coords) => {
+      for (const { trackId, x, y, z } of items) {
+        stmt.run(x, y, z, trackId)
+      }
+    })
+    transaction(coords)
+  }
+
+  getTrackFeatures(): { track_id: string; features_json: string }[] {
+    return this.db.prepare(
+      'SELECT track_id, features_json FROM track_features'
+    ).all() as { track_id: string; features_json: string }[]
+  }
+
+  getTrackFeaturesWithCoords(): { track_id: string; features_json: string; umap_x: number; umap_y: number; umap_z: number }[] {
+    return this.db.prepare(
+      'SELECT track_id, features_json, umap_x, umap_y, umap_z FROM track_features WHERE umap_x IS NOT NULL'
+    ).all() as { track_id: string; features_json: string; umap_x: number; umap_y: number; umap_z: number }[]
+  }
+
+  getTracksWithoutFeatures(): { id: string; file_path: string }[] {
+    return this.db.prepare(
+      'SELECT t.id, t.file_path FROM tracks t LEFT JOIN track_features tf ON t.id = tf.track_id WHERE tf.track_id IS NULL'
+    ).all() as { id: string; file_path: string }[]
+  }
+
+  getFeatureCount(): number {
+    const row = this.db.prepare('SELECT COUNT(*) as count FROM track_features').get() as { count: number }
+    return row.count
+  }
+
   close(): void {
     this.db.close()
   }

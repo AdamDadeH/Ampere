@@ -5,7 +5,9 @@ import { createReadStream, readFileSync, statSync } from 'fs'
 import { createServer, Server } from 'http'
 import { LibraryDatabase } from './database'
 import { LocalStorageProvider } from './storage/local-provider'
+import { AUDIO_EXTENSIONS } from './storage/provider'
 import { FolderScanner } from './scanner'
+import { MusicMetadataExtractor } from './scanner/music-extractor'
 
 const MIME_TYPES: Record<string, string> = {
   '.mp3': 'audio/mpeg',
@@ -297,6 +299,22 @@ function setupIPC(): void {
     win?.close()
   })
 
+  // Riemann feature extraction IPC
+  ipcMain.handle('get-tracks-without-features', () => db.getTracksWithoutFeatures())
+  ipcMain.handle('upsert-track-features', (_event, trackId: string, featuresJson: string) => {
+    db.upsertTrackFeatures(trackId, featuresJson)
+  })
+  ipcMain.handle('get-track-features', () => db.getTrackFeatures())
+  ipcMain.handle('get-track-features-with-coords', () => db.getTrackFeaturesWithCoords())
+  ipcMain.handle('bulk-set-umap-coords', (_event, coords: { trackId: string; x: number; y: number; z: number }[]) => {
+    db.bulkSetUmapCoords(coords)
+  })
+  ipcMain.handle('get-feature-count', () => db.getFeatureCount())
+  ipcMain.handle('read-audio-file', (_event, filePath: string) => {
+    const data = readFileSync(filePath)
+    return data.buffer
+  })
+
   ipcMain.on('remote-player-command', (_event, command: string, ...args: unknown[]) => {
     // Forward from compact window to library window
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -326,8 +344,9 @@ app.whenReady().then(async () => {
   audioServerPort = await startAudioServer()
 
   db = new LibraryDatabase()
-  const provider = new LocalStorageProvider()
-  scanner = new FolderScanner(db, provider)
+  const provider = new LocalStorageProvider(AUDIO_EXTENSIONS)
+  const extractor = new MusicMetadataExtractor()
+  scanner = new FolderScanner(db, provider, extractor)
 
   setupIPC()
   createWindow()

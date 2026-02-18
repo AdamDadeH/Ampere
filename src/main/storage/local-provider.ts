@@ -1,10 +1,15 @@
 import { readdir, stat } from 'fs/promises'
 import { join, extname } from 'path'
 import { existsSync } from 'fs'
-import { StorageProvider, FileEntry, AUDIO_EXTENSIONS } from './provider'
+import { StorageProvider, FileEntry } from './provider'
 
 export class LocalStorageProvider implements StorageProvider {
   name = 'local'
+  private extensions: Set<string>
+
+  constructor(extensions: Set<string>) {
+    this.extensions = extensions
+  }
 
   async *scan(rootPath: string): AsyncGenerator<FileEntry> {
     yield* this.walkDirectory(rootPath)
@@ -26,7 +31,7 @@ export class LocalStorageProvider implements StorageProvider {
         yield* this.walkDirectory(fullPath)
       } else if (entry.isFile()) {
         const ext = extname(entry.name).toLowerCase()
-        if (AUDIO_EXTENSIONS.has(ext)) {
+        if (this.extensions.has(ext)) {
           try {
             const fileStat = await stat(fullPath)
             yield {

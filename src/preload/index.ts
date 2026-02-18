@@ -56,6 +56,14 @@ export interface ElectronAPI {
   onPlayerCommand(callback: (command: string, ...args: unknown[]) => void): () => void
   sendPlayerState(state: PlayerState): void
   onPlayerStateUpdate(callback: (state: PlayerState) => void): () => void
+  // Riemann navigator
+  getTracksWithoutFeatures(): Promise<{ id: string; file_path: string }[]>
+  upsertTrackFeatures(trackId: string, featuresJson: string): Promise<void>
+  getTrackFeatures(): Promise<{ track_id: string; features_json: string }[]>
+  getTrackFeaturesWithCoords(): Promise<{ track_id: string; features_json: string; umap_x: number; umap_y: number; umap_z: number }[]>
+  bulkSetUmapCoords(coords: { trackId: string; x: number; y: number; z: number }[]): Promise<void>
+  getFeatureCount(): Promise<number>
+  readAudioFile(filePath: string): Promise<ArrayBuffer>
 }
 
 const api: ElectronAPI = {
@@ -99,7 +107,15 @@ const api: ElectronAPI = {
     const handler = (_event: unknown, state: PlayerState): void => callback(state)
     ipcRenderer.on('player-state-update', handler)
     return () => ipcRenderer.removeListener('player-state-update', handler)
-  }
+  },
+  // Riemann navigator
+  getTracksWithoutFeatures: () => ipcRenderer.invoke('get-tracks-without-features'),
+  upsertTrackFeatures: (trackId, featuresJson) => ipcRenderer.invoke('upsert-track-features', trackId, featuresJson),
+  getTrackFeatures: () => ipcRenderer.invoke('get-track-features'),
+  getTrackFeaturesWithCoords: () => ipcRenderer.invoke('get-track-features-with-coords'),
+  bulkSetUmapCoords: (coords) => ipcRenderer.invoke('bulk-set-umap-coords', coords),
+  getFeatureCount: () => ipcRenderer.invoke('get-feature-count'),
+  readAudioFile: (filePath) => ipcRenderer.invoke('read-audio-file', filePath)
 }
 
 contextBridge.exposeInMainWorld('api', api)

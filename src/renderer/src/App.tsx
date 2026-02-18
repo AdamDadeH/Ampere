@@ -6,6 +6,7 @@ import { PlayerBar } from './components/PlayerBar'
 import { SetupView } from './components/SetupView'
 import { AudioEngine } from './components/AudioEngine'
 import { CompactPlayer } from './components/compact/CompactPlayer'
+import { RiemannNavigator } from './riemann/RiemannNavigator'
 import './stores/theme' // Initialize theme before render
 
 const isCompactMode = new URLSearchParams(window.location.search).has('mode')
@@ -20,7 +21,7 @@ function App(): React.JSX.Element {
 }
 
 function LibraryApp(): React.JSX.Element {
-  const { stats, loadLibrary, setScanProgress } = useLibraryStore()
+  const { stats, currentView, loadLibrary, setScanProgress } = useLibraryStore()
 
   useEffect(() => {
     loadLibrary()
@@ -41,7 +42,7 @@ function LibraryApp(): React.JSX.Element {
         <>
           <div className="flex-1 flex min-h-0">
             <Sidebar />
-            <TrackList />
+            {currentView === 'riemann' ? <RiemannNavigator /> : <TrackList />}
           </div>
           <PlayerBar />
         </>
