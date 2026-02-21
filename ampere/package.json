@@ -1,0 +1,48 @@
+{
+  "name": "ampere",
+  "version": "1.0.0",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev -c electron-vite.config.ts",
+    "build": "electron-vite build -c electron-vite.config.ts",
+    "preview": "electron-vite preview -c electron-vite.config.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "rebuild": "node-gyp rebuild --target=$(node -e \"console.log(require('electron/package.json').version)\") --dist-url=https://electronjs.org/headers --runtime=electron --directory=../node_modules/better-sqlite3"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Ampere — a desktop music player with Winamp skin support",
+  "devDependencies": {
+    "@tailwindcss/oxide-darwin-arm64": "^4.2.0",
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.2.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/uuid": "^10.0.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "electron": "^40.4.1",
+    "electron-vite": "^3.1.0",
+    "tailwindcss": "^4.1.18",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.1",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@proton/shared": "*",
+    "@types/three": "^0.182.0",
+    "better-sqlite3": "^12.6.2",
+    "jszip": "^3.10.1",
+    "meyda": "^5.6.3",
+    "music-metadata": "^11.12.0",
+    "node-taglib-sharp": "^6.0.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "three": "^0.182.0",
+    "umap-js": "^1.4.0",
+    "uuid": "^13.0.0",
+    "zustand": "^5.0.11"
+  }
+}
