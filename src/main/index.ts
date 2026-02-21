@@ -173,6 +173,17 @@ function notifyDownloadComplete(trackId: string): void {
   }
 }
 
+/** Push updated inferred ratings to all renderer windows */
+function broadcastInferredRatings(): void {
+  const ratings = db.getInferredRatings()
+  const windows = [mainWindow, compactWindow]
+  for (const win of windows) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('inferred-ratings-updated', ratings)
+    }
+  }
+}
+
 /** Notify renderer of download progress */
 function notifyDownloadProgress(trackId: string, progress: number): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -473,6 +484,7 @@ function setupIPC(): void {
 
   ipcMain.handle('recompute-inferred-ratings', () => {
     db.recomputeInferredRatings()
+    broadcastInferredRatings()
   })
 
   ipcMain.on('remote-player-command', (_event, command: string, ...args: unknown[]) => {
@@ -540,12 +552,18 @@ app.whenReady().then(async () => {
 
   // Deferred startup recompute of inferred ratings
   setTimeout(() => {
-    try { db.recomputeInferredRatings() } catch (e) { console.error('Startup inferred rating recompute failed:', e) }
+    try {
+      db.recomputeInferredRatings()
+      broadcastInferredRatings()
+    } catch (e) { console.error('Startup inferred rating recompute failed:', e) }
   }, 5000)
 
   // Recompute inferred ratings every 10 minutes
   inferredRatingInterval = setInterval(() => {
-    try { db.recomputeInferredRatings() } catch (e) { console.error('Periodic inferred rating recompute failed:', e) }
+    try {
+      db.recomputeInferredRatings()
+      broadcastInferredRatings()
+    } catch (e) { console.error('Periodic inferred rating recompute failed:', e) }
   }, 10 * 60 * 1000)
 
   app.on('activate', () => {

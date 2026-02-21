@@ -196,7 +196,16 @@ function CellContent({
   }
 
   if (col.key === 'rating') {
-    return <StarRatingInline trackId={track.id} rating={track.rating} />
+    return (
+      <div className="flex flex-col items-end">
+        {(track.inferred_rating ?? 0) > 0 && (
+          <span className="text-[9px] text-text-faint opacity-50 leading-none" title="Predicted rating">
+            ~{track.inferred_rating?.toFixed(1)}
+          </span>
+        )}
+        <StarRatingInline trackId={track.id} rating={track.rating} />
+      </div>
+    )
   }
 
   if (col.key === 'play_count') {

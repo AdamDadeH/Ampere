@@ -139,6 +139,7 @@ interface LibraryState {
   lovingThis: () => void
   likeNotNow: () => void
   notFeelingIt: () => void
+  applyInferredRatings: (ratings: { id: string; inferred_rating: number }[]) => void
 }
 
 export const useLibraryStore = create<LibraryState>((set, get) => ({
@@ -419,6 +420,19 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     if (!currentTrack) return
     get().recordFeedback(currentTrack.id, 'explicit_negative', null, 'not_feeling_it')
     get().nextTrack('not_feeling_it')
+  },
+
+  applyInferredRatings: (ratings) => {
+    const map = new Map(ratings.map(r => [r.id, r.inferred_rating]))
+    const updateTrack = (t: Track): Track => {
+      const inferred = map.get(t.id)
+      return inferred !== undefined ? { ...t, inferred_rating: inferred } : t
+    }
+    set(state => ({
+      tracks: state.tracks.map(updateTrack),
+      queue: state.queue.map(updateTrack),
+      currentTrack: state.currentTrack ? updateTrack(state.currentTrack) : null
+    }))
   }
 }))
 

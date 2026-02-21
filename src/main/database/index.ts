@@ -648,24 +648,49 @@ export class LibraryDatabase {
   private static readonly MIN_TRAINING_SAMPLES = 15
 
   /**
-   * Aggregate raw feedback events into a feature vector per track.
-   * Features (12-dim): 9 attention-weighted event counts,
-   * avg completion %, avg skip completion %, log2(total_events+1).
+   * Build feature vectors for all tracks that have audio features OR feedback.
+   * Behavioral (12-dim): 9 attention-weighted event counts,
+   *   avg completion %, avg skip completion %, log2(total_events+1).
+   * Audio (56-dim): Meyda spectral features (centroid, MFCCs, RMS, chroma, ZCR).
+   * Total: 68-dim per track. Missing sides filled with zeros.
    */
-  private aggregateFeedbackFeatures(): Map<string, number[]> {
-    const rows = this.db.prepare(
-      'SELECT track_id, event_type, event_value, attention_weight FROM track_feedback'
-    ).all() as { track_id: string; event_type: string; event_value: number | null; attention_weight: number }[]
+  private aggregateTrackFeatures(): Map<string, number[]> {
+    // Load audio features (56-dim Meyda vectors) — the foundation
+    const audioFeatureMap = new Map<string, number[]>()
+    let audioDim = 0
+    try {
+      const audioRows = this.db.prepare(
+        'SELECT track_id, features_json FROM track_features'
+      ).all() as { track_id: string; features_json: string }[]
+      for (const row of audioRows) {
+        const parsed = JSON.parse(row.features_json) as number[]
+        audioFeatureMap.set(row.track_id, parsed)
+        if (audioDim === 0) audioDim = parsed.length
+      }
+    } catch {
+      // track_features table may not exist yet
+    }
+    const audioZeros = new Array(audioDim).fill(0)
 
-    const trackData = new Map<string, {
+    // Load behavioral feedback
+    let feedbackRows: { track_id: string; event_type: string; event_value: number | null; attention_weight: number }[] = []
+    try {
+      feedbackRows = this.db.prepare(
+        'SELECT track_id, event_type, event_value, attention_weight FROM track_feedback'
+      ).all() as typeof feedbackRows
+    } catch {
+      // track_feedback table may not exist yet
+    }
+
+    const trackBehavior = new Map<string, {
       weightedCounts: number[]
       completionSum: number; completionCount: number
       skipCompletionSum: number; skipCompletionCount: number
       totalEvents: number
     }>()
 
-    for (const row of rows) {
-      let data = trackData.get(row.track_id)
+    for (const row of feedbackRows) {
+      let data = trackBehavior.get(row.track_id)
       if (!data) {
         data = {
           weightedCounts: new Array(9).fill(0),
@@ -673,7 +698,7 @@ export class LibraryDatabase {
           skipCompletionSum: 0, skipCompletionCount: 0,
           totalEvents: 0
         }
-        trackData.set(row.track_id, data)
+        trackBehavior.set(row.track_id, data)
       }
 
       const idx = (LibraryDatabase.FEEDBACK_EVENT_TYPES as readonly string[]).indexOf(row.event_type)
@@ -690,14 +715,23 @@ export class LibraryDatabase {
       data.totalEvents++
     }
 
+    const behavioralZeros = new Array(12).fill(0)
+
+    // Build combined features for all tracks with audio features OR feedback
+    const allTrackIds = new Set([...audioFeatureMap.keys(), ...trackBehavior.keys()])
     const features = new Map<string, number[]>()
-    for (const [trackId, data] of trackData) {
-      features.set(trackId, [
-        ...data.weightedCounts,
-        data.completionCount > 0 ? data.completionSum / data.completionCount : 0,
-        data.skipCompletionCount > 0 ? data.skipCompletionSum / data.skipCompletionCount : 0,
-        Math.log2(data.totalEvents + 1)
-      ])
+
+    for (const trackId of allTrackIds) {
+      const behavior = trackBehavior.get(trackId)
+      const behavioral = behavior ? [
+        ...behavior.weightedCounts,
+        behavior.completionCount > 0 ? behavior.completionSum / behavior.completionCount : 0,
+        behavior.skipCompletionCount > 0 ? behavior.skipCompletionSum / behavior.skipCompletionCount : 0,
+        Math.log2(behavior.totalEvents + 1)
+      ] : behavioralZeros
+
+      const audio = audioFeatureMap.get(trackId) || audioZeros
+      features.set(trackId, [...behavioral, ...audio])
     }
     return features
   }
@@ -835,32 +869,43 @@ export class LibraryDatabase {
       'explicit_negative': () => -1.0,
     }
 
-    const rows = this.db.prepare(
-      'SELECT track_id, event_type, event_value, attention_weight, source FROM track_feedback'
-    ).all() as { track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null }[]
-
+    // Baseline: score ALL tracks from play_count
+    const allTracks = this.db.prepare('SELECT id, play_count FROM tracks').all() as { id: string; play_count: number }[]
     const trackScores = new Map<string, { total: number; count: number }>()
-    for (const row of rows) {
-      const scorer = scoreMap[row.event_type]
-      if (!scorer) continue
-      const weighted = scorer(row.event_value, row.source) * row.attention_weight
-      const existing = trackScores.get(row.track_id)
-      if (existing) {
-        existing.total += weighted
-        existing.count++
-      } else {
-        trackScores.set(row.track_id, { total: weighted, count: 1 })
-      }
+    for (const track of allTracks) {
+      const pc = track.play_count || 0
+      // play_count as prior: each doubling of plays adds 0.15 to raw score
+      const playSignal = Math.log2(pc + 1) * 0.15
+      trackScores.set(track.id, { total: playSignal, count: pc > 0 ? 1 : 0 })
     }
 
+    // Layer feedback events on top (table may not exist on first run)
+    try {
+      const rows = this.db.prepare(
+        'SELECT track_id, event_type, event_value, attention_weight, source FROM track_feedback'
+      ).all() as { track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null }[]
+
+      for (const row of rows) {
+        const scorer = scoreMap[row.event_type]
+        if (!scorer) continue
+        const weighted = scorer(row.event_value, row.source) * row.attention_weight
+        const existing = trackScores.get(row.track_id)
+        if (existing) {
+          existing.total += weighted
+          existing.count++
+        } else {
+          trackScores.set(row.track_id, { total: weighted, count: 1 })
+        }
+      }
+    } catch {
+      // track_feedback table may not exist yet
+    }
+
+    // Map all scores through sigmoid to 0.0–5.0
     const update = this.db.prepare('UPDATE tracks SET inferred_rating = ? WHERE id = ?')
-    const clear = this.db.prepare(
-      'UPDATE tracks SET inferred_rating = NULL WHERE id NOT IN (SELECT DISTINCT track_id FROM track_feedback)'
-    )
     const transaction = this.db.transaction(() => {
-      clear.run()
       for (const [trackId, { total, count }] of trackScores) {
-        const normalized = total / Math.log2(count + 1)
+        const normalized = count > 0 ? total / Math.log2(count + 1) : 0
         const inferred = 5.0 / (1.0 + Math.exp(-normalized * 2))
         update.run(Math.round(inferred * 100) / 100, trackId)
       }
@@ -869,41 +914,46 @@ export class LibraryDatabase {
   }
 
   /**
-   * Recompute inferred_rating for all tracks with feedback.
-   * Tries to fit a ridge regression from rated tracks' feedback → rating.
-   * Falls back to hand-tuned heuristic when training data is insufficient.
+   * Recompute inferred_rating for all tracks with audio features or feedback.
+   * Tries to fit a ridge regression from rated tracks → rating using audio + behavioral features.
+   * Falls back to hand-tuned heuristic (behavioral only) when training data is insufficient.
    */
   recomputeInferredRatings(): void {
-    const features = this.aggregateFeedbackFeatures()
-    if (features.size === 0) {
-      this.db.prepare('UPDATE tracks SET inferred_rating = NULL').run()
-      return
+    const features = this.aggregateTrackFeatures()
+
+    // Try learned model when we have audio/behavioral features
+    if (features.size > 0) {
+      const model = this.fitRatingModel(features)
+      if (model) {
+        const { weights, means, stds, trainingSize } = model
+        const update = this.db.prepare('UPDATE tracks SET inferred_rating = ? WHERE id = ?')
+        const clear = this.db.prepare('UPDATE tracks SET inferred_rating = NULL WHERE inferred_rating IS NOT NULL')
+        const transaction = this.db.transaction(() => {
+          clear.run()
+          for (const [trackId, feat] of features) {
+            const normed = feat.map((v, j) => (v - means[j]) / stds[j])
+            normed.push(1) // bias
+            let predicted = 0
+            for (let j = 0; j < weights.length; j++) predicted += normed[j] * weights[j]
+            const clamped = Math.round(Math.max(0, Math.min(5, predicted)) * 100) / 100
+            update.run(clamped, trackId)
+          }
+        })
+        transaction()
+        console.log(`Inferred ratings: learned model (${trainingSize} training pairs, ${features.size} predictions)`)
+        return
+      }
     }
 
-    const model = this.fitRatingModel(features)
-    if (model) {
-      const { weights, means, stds, trainingSize } = model
-      const update = this.db.prepare('UPDATE tracks SET inferred_rating = ? WHERE id = ?')
-      const clear = this.db.prepare(
-        'UPDATE tracks SET inferred_rating = NULL WHERE id NOT IN (SELECT DISTINCT track_id FROM track_feedback)'
-      )
-      const transaction = this.db.transaction(() => {
-        clear.run()
-        for (const [trackId, feat] of features) {
-          const normed = feat.map((v, j) => (v - means[j]) / stds[j])
-          normed.push(1) // bias
-          let predicted = 0
-          for (let j = 0; j < weights.length; j++) predicted += normed[j] * weights[j]
-          const clamped = Math.round(Math.max(0, Math.min(5, predicted)) * 100) / 100
-          update.run(clamped, trackId)
-        }
-      })
-      transaction()
-      console.log(`Inferred ratings: learned model (${trainingSize} training pairs, ${features.size} predictions)`)
-    } else {
-      this.applyHeuristicRatings()
-      console.log(`Inferred ratings: heuristic fallback (${features.size} tracks, <${LibraryDatabase.MIN_TRAINING_SAMPLES} rated pairs)`)
-    }
+    // Heuristic fallback: scores ALL tracks using play_count + feedback events
+    this.applyHeuristicRatings()
+    console.log(`Inferred ratings: heuristic fallback (play_count baseline for all tracks)`)
+  }
+
+  getInferredRatings(): { id: string; inferred_rating: number }[] {
+    return this.db.prepare(
+      'SELECT id, inferred_rating FROM tracks WHERE inferred_rating IS NOT NULL'
+    ).all() as { id: string; inferred_rating: number }[]
   }
 
   close(): void {

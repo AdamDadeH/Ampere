@@ -53,11 +53,18 @@ export function PlayerBar(): React.JSX.Element {
           </p>
           <p className="text-xs text-text-faint truncate">{currentTrack.artist || 'Unknown'}</p>
         </div>
-        <StarRating
-          rating={currentTrack.rating}
-          onChange={(r) => setRating(currentTrack.id, r)}
-          size="md"
-        />
+        <div className="flex flex-col items-end gap-0.5">
+          {(currentTrack.inferred_rating ?? 0) > 0 && (
+            <span className="text-[10px] text-text-faint opacity-60" title="Predicted rating">
+              ~{currentTrack.inferred_rating?.toFixed(1)}
+            </span>
+          )}
+          <StarRating
+            rating={currentTrack.rating}
+            onChange={(r) => setRating(currentTrack.id, r)}
+            size="md"
+          />
+        </div>
       </div>
 
       {/* Controls — unified transport + feedback strip */}

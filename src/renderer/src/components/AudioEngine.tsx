@@ -379,6 +379,14 @@ export function AudioEngine(): React.JSX.Element {
     return unsubscribe
   }, [])
 
+  // Listen for inferred rating updates from main process
+  useEffect(() => {
+    const unsubscribe = window.api.onInferredRatingsUpdated((ratings) => {
+      useLibraryStore.getState().applyInferredRatings(ratings)
+    })
+    return unsubscribe
+  }, [])
+
   // Attention tracking: record user interactions and foreground state
   useEffect(() => {
     const onInteraction = (): void => recordInteraction()

@@ -90,6 +90,7 @@ export interface ElectronAPI {
   recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null): Promise<void>
   getTrackFeedback(trackId: string): Promise<{ id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; created_at: string }[]>
   recomputeInferredRatings(): Promise<void>
+  onInferredRatingsUpdated(callback: (ratings: { id: string; inferred_rating: number }[]) => void): () => void
 }
 
 const api: ElectronAPI = {
@@ -169,7 +170,12 @@ const api: ElectronAPI = {
   recordFeedback: (trackId, eventType, eventValue, attentionWeight, source) =>
     ipcRenderer.invoke('record-feedback', trackId, eventType, eventValue, attentionWeight, source),
   getTrackFeedback: (trackId) => ipcRenderer.invoke('get-track-feedback', trackId),
-  recomputeInferredRatings: () => ipcRenderer.invoke('recompute-inferred-ratings')
+  recomputeInferredRatings: () => ipcRenderer.invoke('recompute-inferred-ratings'),
+  onInferredRatingsUpdated: (callback) => {
+    const handler = (_event: unknown, ratings: { id: string; inferred_rating: number }[]): void => callback(ratings)
+    ipcRenderer.on('inferred-ratings-updated', handler)
+    return () => ipcRenderer.removeListener('inferred-ratings-updated', handler)
+  }
 }
 
 contextBridge.exposeInMainWorld('api', api)
