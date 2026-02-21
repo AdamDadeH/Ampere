@@ -612,7 +612,7 @@ export function RiemannNavigator(): React.JSX.Element {
 
       const track = tracks.find(t => t.id === nextId)
       if (track) {
-        playTrack(track, tracks)
+        playTrack(track, tracks, 'drift')
         // Camera follows
         const nodeIdx = s.trackIdToIndex.get(nextId)
         if (nodeIdx !== undefined) {

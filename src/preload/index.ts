@@ -29,6 +29,13 @@ export interface QueueTrackInfo {
   duration: number
 }
 
+export interface TrackPathResult {
+  url: string
+  available: boolean
+  downloading: boolean
+  syncStatus: string
+}
+
 export interface ElectronAPI {
   selectFolder(): Promise<string | null>
   getTracks(filter?: { artist?: string; album?: string }): Promise<unknown[]>
@@ -37,7 +44,7 @@ export interface ElectronAPI {
   getTracksByAlbumArtist(artist: string): Promise<unknown[]>
   getAlbumsByAlbumArtist(artist: string): Promise<unknown[]>
   getAlbums(artist?: string): Promise<unknown[]>
-  getTrackPath(trackId: string): Promise<string | null>
+  getTrackPath(trackId: string): Promise<TrackPathResult | null>
   getArtworkUrl(artworkPath: string): string
   onScanProgress(callback: (progress: unknown) => void): () => void
   updatePlayCount(trackId: string): Promise<void>
@@ -64,6 +71,25 @@ export interface ElectronAPI {
   bulkSetUmapCoords(coords: { trackId: string; x: number; y: number; z: number }[]): Promise<void>
   getFeatureCount(): Promise<number>
   readAudioFile(filePath: string): Promise<ArrayBuffer>
+  // Cloud-first: downloads
+  requestTrackDownload(trackId: string): Promise<boolean>
+  onDownloadComplete(callback: (trackId: string) => void): () => void
+  onDownloadProgress(callback: (data: { trackId: string; progress: number }) => void): () => void
+  // Cloud-first: storage sources
+  detectProtonDrive(): Promise<{ path: string; email: string }[]>
+  getStorageSources(): Promise<unknown[]>
+  addStorageSource(source: { id: string; type: string; root_path: string; label?: string; proton_email?: string }): Promise<void>
+  removeStorageSource(sourceId: string): Promise<void>
+  // Cloud-first: cache management
+  getCacheStats(): Promise<{ totalTracks: number; cachedTracks: number; cloudOnlyTracks: number; pinnedTracks: number; cachedBytes: number; pinnedBytes: number }>
+  setCacheLimit(bytes: number): Promise<void>
+  pinTrack(trackId: string): Promise<void>
+  unpinTrack(trackId: string): Promise<void>
+  evictCache(): Promise<{ evicted: number; freedBytes: number }>
+  // Feedback
+  recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null): Promise<void>
+  getTrackFeedback(trackId: string): Promise<{ id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; created_at: string }[]>
+  recomputeInferredRatings(): Promise<void>
 }
 
 const api: ElectronAPI = {
@@ -115,7 +141,35 @@ const api: ElectronAPI = {
   getTrackFeaturesWithCoords: () => ipcRenderer.invoke('get-track-features-with-coords'),
   bulkSetUmapCoords: (coords) => ipcRenderer.invoke('bulk-set-umap-coords', coords),
   getFeatureCount: () => ipcRenderer.invoke('get-feature-count'),
-  readAudioFile: (filePath) => ipcRenderer.invoke('read-audio-file', filePath)
+  readAudioFile: (filePath) => ipcRenderer.invoke('read-audio-file', filePath),
+  // Cloud-first: downloads
+  requestTrackDownload: (trackId) => ipcRenderer.invoke('request-track-download', trackId),
+  onDownloadComplete: (callback) => {
+    const handler = (_event: unknown, trackId: string): void => callback(trackId)
+    ipcRenderer.on('download-complete', handler)
+    return () => ipcRenderer.removeListener('download-complete', handler)
+  },
+  onDownloadProgress: (callback) => {
+    const handler = (_event: unknown, data: { trackId: string; progress: number }): void => callback(data)
+    ipcRenderer.on('download-progress', handler)
+    return () => ipcRenderer.removeListener('download-progress', handler)
+  },
+  // Cloud-first: storage sources
+  detectProtonDrive: () => ipcRenderer.invoke('detect-proton-drive'),
+  getStorageSources: () => ipcRenderer.invoke('get-storage-sources'),
+  addStorageSource: (source) => ipcRenderer.invoke('add-storage-source', source),
+  removeStorageSource: (sourceId) => ipcRenderer.invoke('remove-storage-source', sourceId),
+  // Cloud-first: cache management
+  getCacheStats: () => ipcRenderer.invoke('get-cache-stats'),
+  setCacheLimit: (bytes) => ipcRenderer.invoke('set-cache-limit', bytes),
+  pinTrack: (trackId) => ipcRenderer.invoke('pin-track', trackId),
+  unpinTrack: (trackId) => ipcRenderer.invoke('unpin-track', trackId),
+  evictCache: () => ipcRenderer.invoke('evict-cache'),
+  // Feedback
+  recordFeedback: (trackId, eventType, eventValue, attentionWeight, source) =>
+    ipcRenderer.invoke('record-feedback', trackId, eventType, eventValue, attentionWeight, source),
+  getTrackFeedback: (trackId) => ipcRenderer.invoke('get-track-feedback', trackId),
+  recomputeInferredRatings: () => ipcRenderer.invoke('recompute-inferred-ratings')
 }
 
 contextBridge.exposeInMainWorld('api', api)

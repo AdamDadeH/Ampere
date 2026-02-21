@@ -10,13 +10,19 @@ export interface ScanProgress {
   error?: string
 }
 
+/** Source context passed to the extractor so it can set sync_status correctly */
+export interface SourceContext {
+  sourceId: string | null
+  sourceType: 'local' | 'proton-drive'
+}
+
 /** Interface for domain-specific metadata extraction */
 export interface MetadataExtractor {
   /** Called once before scanning starts (e.g., to create artwork directories) */
   init?(): Promise<void>
 
   /** Extract metadata from a file, return track data and entity associations */
-  extract(filePath: string, fileName: string, fileSize: number): Promise<{
+  extract(filePath: string, fileName: string, fileSize: number, source?: SourceContext): Promise<{
     track: TrackUpsertData
     entities: { type: string; names: string[] }[]
   }>
@@ -33,7 +39,7 @@ export class FolderScanner {
     this.extractor = extractor
   }
 
-  async scan(rootPath: string, window: BrowserWindow): Promise<void> {
+  async scan(rootPath: string, window: BrowserWindow, source?: SourceContext): Promise<void> {
     if (this.extractor.init) {
       await this.extractor.init()
     }
@@ -100,7 +106,7 @@ export class FolderScanner {
       })
 
       try {
-        const result = await this.extractor.extract(file.path, file.name, file.size)
+        const result = await this.extractor.extract(file.path, file.name, file.size, source)
         batch.push(result)
 
         if (batch.length >= batchSize) {
@@ -117,6 +123,8 @@ export class FolderScanner {
     }
 
     // Phase 4: Remove orphaned tracks (files deleted from disk)
+    // For Proton Drive sources, readdir() already sees cloud-only files via FileProvider,
+    // so they'll be in discoveredPaths and won't be incorrectly orphaned.
     const discoveredPaths = new Set(files.map(f => f.path))
     const removed = this.db.removeOrphanTracks(discoveredPaths)
     if (removed > 0) {

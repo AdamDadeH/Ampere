@@ -31,6 +31,10 @@ export interface Track {
   date_modified: string
   sync_status: string
   cloud_path: string | null
+  last_accessed: string | null
+  pinned: number
+  source_id: string | null
+  inferred_rating: number | null
 }
 
 export interface ArtistInfo {
@@ -56,7 +60,7 @@ export interface LibraryStats {
   total_duration: number
 }
 
-export type TrackUpsertData = Omit<Track, 'play_count' | 'last_played' | 'rating' | 'date_added' | 'date_modified'>
+export type TrackUpsertData = Omit<Track, 'play_count' | 'last_played' | 'rating' | 'date_added' | 'date_modified' | 'last_accessed' | 'pinned'>
 
 export class LibraryDatabase {
   private db: Database.Database
@@ -88,6 +92,16 @@ export class LibraryDatabase {
     } catch {
       // Column already exists
     }
+
+    // Cloud-first columns: last_accessed for LRU eviction, pinned for keep-local,
+    // source_id to link tracks to their storage source
+    const addColumnSafe = (sql: string): void => {
+      try { this.db.exec(sql) } catch { /* column already exists */ }
+    }
+    addColumnSafe('ALTER TABLE tracks ADD COLUMN last_accessed TEXT')
+    addColumnSafe('ALTER TABLE tracks ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
+    addColumnSafe('ALTER TABLE tracks ADD COLUMN source_id TEXT')
+    addColumnSafe('ALTER TABLE tracks ADD COLUMN inferred_rating REAL DEFAULT NULL')
   }
 
   private refreshDerivedTables(): void {
@@ -122,7 +136,7 @@ export class LibraryDatabase {
             title = ?, artist = ?, album = ?, album_artist = ?,
             genre = ?, year = ?, track_number = ?, disc_number = ?,
             duration = ?, bitrate = ?, sample_rate = ?, codec = ?,
-            artwork_path = ?, sync_status = ?, cloud_path = ?,
+            artwork_path = ?, sync_status = ?, cloud_path = ?, source_id = ?,
             date_modified = datetime('now')
           WHERE id = ?
         `).run(
@@ -130,7 +144,7 @@ export class LibraryDatabase {
           track.title, track.artist, track.album, track.album_artist,
           track.genre, track.year, track.track_number, track.disc_number,
           track.duration, track.bitrate, track.sample_rate, track.codec,
-          track.artwork_path, track.sync_status, track.cloud_path,
+          track.artwork_path, track.sync_status, track.cloud_path, track.source_id,
           existing.id
         )
         return existing.id
@@ -149,7 +163,7 @@ export class LibraryDatabase {
           title = ?, artist = ?, album = ?, album_artist = ?,
           genre = ?, year = ?, track_number = ?, disc_number = ?,
           duration = ?, bitrate = ?, sample_rate = ?, codec = ?,
-          artwork_path = ?, sync_status = ?, cloud_path = ?,
+          artwork_path = ?, sync_status = ?, cloud_path = ?, source_id = ?,
           date_modified = datetime('now')
         WHERE id = ?
       `).run(
@@ -157,7 +171,7 @@ export class LibraryDatabase {
         track.title, track.artist, track.album, track.album_artist,
         track.genre, track.year, track.track_number, track.disc_number,
         track.duration, track.bitrate, track.sample_rate, track.codec,
-        track.artwork_path, track.sync_status, track.cloud_path,
+        track.artwork_path, track.sync_status, track.cloud_path, track.source_id,
         existingByPath.id
       )
       return existingByPath.id
@@ -167,10 +181,10 @@ export class LibraryDatabase {
     this.db.prepare(`
       INSERT INTO tracks (id, embedded_id, file_path, file_name, file_size,
         title, artist, album, album_artist, genre, year, track_number, disc_number,
-        duration, bitrate, sample_rate, codec, artwork_path, sync_status, cloud_path)
+        duration, bitrate, sample_rate, codec, artwork_path, sync_status, cloud_path, source_id)
       VALUES (@id, @embedded_id, @file_path, @file_name, @file_size,
         @title, @artist, @album, @album_artist, @genre, @year, @track_number, @disc_number,
-        @duration, @bitrate, @sample_rate, @codec, @artwork_path, @sync_status, @cloud_path)
+        @duration, @bitrate, @sample_rate, @codec, @artwork_path, @sync_status, @cloud_path, @source_id)
     `).run(track)
     return track.id
   }
@@ -182,6 +196,10 @@ export class LibraryDatabase {
       }
     })
     transaction(tracks)
+  }
+
+  getTrackByPath(filePath: string): { id: string; sync_status: string } | undefined {
+    return this.db.prepare('SELECT id, sync_status FROM tracks WHERE file_path = ?').get(filePath) as { id: string; sync_status: string } | undefined
   }
 
   hasTrackByPath(filePath: string): boolean {
@@ -510,6 +528,382 @@ export class LibraryDatabase {
   getFeatureCount(): number {
     const row = this.db.prepare('SELECT COUNT(*) as count FROM track_features').get() as { count: number }
     return row.count
+  }
+
+  // --- Storage Sources ---
+
+  addStorageSource(source: { id: string; type: string; root_path: string; label?: string; proton_email?: string }): void {
+    this.db.prepare(
+      'INSERT OR REPLACE INTO storage_sources (id, type, root_path, label, proton_email) VALUES (?, ?, ?, ?, ?)'
+    ).run(source.id, source.type, source.root_path, source.label || null, source.proton_email || null)
+  }
+
+  getStorageSources(): { id: string; type: string; root_path: string; label: string | null; proton_email: string | null; added_at: string }[] {
+    return this.db.prepare('SELECT * FROM storage_sources').all() as {
+      id: string; type: string; root_path: string; label: string | null; proton_email: string | null; added_at: string
+    }[]
+  }
+
+  getStorageSource(id: string): { id: string; type: string; root_path: string; label: string | null; proton_email: string | null } | undefined {
+    return this.db.prepare('SELECT * FROM storage_sources WHERE id = ?').get(id) as {
+      id: string; type: string; root_path: string; label: string | null; proton_email: string | null
+    } | undefined
+  }
+
+  removeStorageSource(id: string): void {
+    this.db.prepare('DELETE FROM storage_sources WHERE id = ?').run(id)
+  }
+
+  findStorageSourceByPath(rootPath: string): { id: string; type: string; root_path: string } | undefined {
+    return this.db.prepare('SELECT * FROM storage_sources WHERE root_path = ?').get(rootPath) as {
+      id: string; type: string; root_path: string
+    } | undefined
+  }
+
+  // --- Cache Management ---
+
+  updateLastAccessed(trackId: string): void {
+    this.db.prepare("UPDATE tracks SET last_accessed = datetime('now') WHERE id = ?").run(trackId)
+  }
+
+  pinTrack(trackId: string): void {
+    this.db.prepare('UPDATE tracks SET pinned = 1 WHERE id = ?').run(trackId)
+  }
+
+  unpinTrack(trackId: string): void {
+    this.db.prepare('UPDATE tracks SET pinned = 0 WHERE id = ?').run(trackId)
+  }
+
+  isPinned(trackId: string): boolean {
+    const row = this.db.prepare('SELECT pinned FROM tracks WHERE id = ?').get(trackId) as { pinned: number } | undefined
+    return row?.pinned === 1
+  }
+
+  /**
+   * Get eviction candidates: cached PD tracks that aren't pinned, ordered by least recently accessed.
+   */
+  getEvictionCandidates(): { id: string; file_path: string; file_size: number; last_accessed: string | null }[] {
+    return this.db.prepare(`
+      SELECT id, file_path, file_size, last_accessed FROM tracks
+      WHERE sync_status = 'cached' AND pinned = 0
+      ORDER BY last_accessed ASC NULLS FIRST
+    `).all() as { id: string; file_path: string; file_size: number; last_accessed: string | null }[]
+  }
+
+  /**
+   * Get cache statistics for UI display.
+   */
+  getCacheStats(): { totalTracks: number; cachedTracks: number; cloudOnlyTracks: number; pinnedTracks: number; cachedBytes: number; pinnedBytes: number } {
+    const row = this.db.prepare(`
+      SELECT
+        COUNT(*) as totalTracks,
+        SUM(CASE WHEN sync_status = 'cached' THEN 1 ELSE 0 END) as cachedTracks,
+        SUM(CASE WHEN sync_status = 'cloud-only' THEN 1 ELSE 0 END) as cloudOnlyTracks,
+        SUM(CASE WHEN pinned = 1 THEN 1 ELSE 0 END) as pinnedTracks,
+        COALESCE(SUM(CASE WHEN sync_status = 'cached' THEN file_size ELSE 0 END), 0) as cachedBytes,
+        COALESCE(SUM(CASE WHEN pinned = 1 THEN file_size ELSE 0 END), 0) as pinnedBytes
+      FROM tracks
+    `).get() as { totalTracks: number; cachedTracks: number; cloudOnlyTracks: number; pinnedTracks: number; cachedBytes: number; pinnedBytes: number }
+    return row
+  }
+
+  updateSyncStatus(trackId: string, status: string): void {
+    this.db.prepare('UPDATE tracks SET sync_status = ? WHERE id = ?').run(status, trackId)
+  }
+
+  /**
+   * Bulk update sync_status for tracks within a Proton Drive source path.
+   * Used during the one-time migration from 'local' to 'cached' for existing PD tracks.
+   */
+  migrateProtonDriveSyncStatus(pdRootPath: string, sourceId: string): number {
+    const result = this.db.prepare(`
+      UPDATE tracks SET sync_status = 'cached', source_id = ?
+      WHERE file_path LIKE ? AND sync_status = 'local'
+    `).run(sourceId, pdRootPath + '%')
+    return result.changes
+  }
+
+  // --- Feedback ---
+
+  recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null): void {
+    this.db.prepare(
+      'INSERT INTO track_feedback (track_id, event_type, event_value, attention_weight, source) VALUES (?, ?, ?, ?, ?)'
+    ).run(trackId, eventType, eventValue, attentionWeight, source)
+  }
+
+  getTrackFeedback(trackId: string): { id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; created_at: string }[] {
+    return this.db.prepare(
+      'SELECT * FROM track_feedback WHERE track_id = ? ORDER BY created_at DESC'
+    ).all(trackId) as { id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; created_at: string }[]
+  }
+
+  // --- Inferred rating: learned model with heuristic fallback ---
+
+  private static readonly FEEDBACK_EVENT_TYPES = [
+    'track_completed', 'track_skipped', 'track_started',
+    'seek_backward', 'seek_forward', 'pause_abandon',
+    'explicit_positive', 'explicit_positive_not_now', 'explicit_negative'
+  ] as const
+
+  private static readonly MIN_TRAINING_SAMPLES = 15
+
+  /**
+   * Aggregate raw feedback events into a feature vector per track.
+   * Features (12-dim): 9 attention-weighted event counts,
+   * avg completion %, avg skip completion %, log2(total_events+1).
+   */
+  private aggregateFeedbackFeatures(): Map<string, number[]> {
+    const rows = this.db.prepare(
+      'SELECT track_id, event_type, event_value, attention_weight FROM track_feedback'
+    ).all() as { track_id: string; event_type: string; event_value: number | null; attention_weight: number }[]
+
+    const trackData = new Map<string, {
+      weightedCounts: number[]
+      completionSum: number; completionCount: number
+      skipCompletionSum: number; skipCompletionCount: number
+      totalEvents: number
+    }>()
+
+    for (const row of rows) {
+      let data = trackData.get(row.track_id)
+      if (!data) {
+        data = {
+          weightedCounts: new Array(9).fill(0),
+          completionSum: 0, completionCount: 0,
+          skipCompletionSum: 0, skipCompletionCount: 0,
+          totalEvents: 0
+        }
+        trackData.set(row.track_id, data)
+      }
+
+      const idx = (LibraryDatabase.FEEDBACK_EVENT_TYPES as readonly string[]).indexOf(row.event_type)
+      if (idx >= 0) data.weightedCounts[idx] += row.attention_weight
+
+      if (row.event_type === 'track_completed' && row.event_value != null) {
+        data.completionSum += row.event_value
+        data.completionCount++
+      }
+      if (row.event_type === 'track_skipped' && row.event_value != null) {
+        data.skipCompletionSum += row.event_value
+        data.skipCompletionCount++
+      }
+      data.totalEvents++
+    }
+
+    const features = new Map<string, number[]>()
+    for (const [trackId, data] of trackData) {
+      features.set(trackId, [
+        ...data.weightedCounts,
+        data.completionCount > 0 ? data.completionSum / data.completionCount : 0,
+        data.skipCompletionCount > 0 ? data.skipCompletionSum / data.skipCompletionCount : 0,
+        Math.log2(data.totalEvents + 1)
+      ])
+    }
+    return features
+  }
+
+  /**
+   * Fit a ridge regression from feedback features → explicit star ratings.
+   * Returns model weights + normalization params, or null if insufficient data.
+   */
+  private fitRatingModel(features: Map<string, number[]>): {
+    weights: number[]; means: number[]; stds: number[]; trainingSize: number
+  } | null {
+    const ratedTracks = this.db.prepare(
+      'SELECT id, rating FROM tracks WHERE rating > 0'
+    ).all() as { id: string; rating: number }[]
+
+    const X: number[][] = []
+    const y: number[] = []
+    for (const track of ratedTracks) {
+      const feat = features.get(track.id)
+      if (feat) {
+        X.push(feat)
+        y.push(track.rating)
+      }
+    }
+
+    if (X.length < LibraryDatabase.MIN_TRAINING_SAMPLES) return null
+
+    const dim = X[0].length
+
+    // Z-score normalization
+    const means = new Array(dim).fill(0)
+    const stds = new Array(dim).fill(0)
+    for (let j = 0; j < dim; j++) {
+      let sum = 0
+      for (let i = 0; i < X.length; i++) sum += X[i][j]
+      means[j] = sum / X.length
+    }
+    for (let j = 0; j < dim; j++) {
+      let sumSq = 0
+      for (let i = 0; i < X.length; i++) sumSq += (X[i][j] - means[j]) ** 2
+      stds[j] = Math.sqrt(sumSq / X.length) || 1
+    }
+
+    // Normalize + add bias column
+    const Xnorm = X.map(row => {
+      const normed = row.map((v, j) => (v - means[j]) / stds[j])
+      normed.push(1) // bias
+      return normed
+    })
+
+    const weights = this.solveRidge(Xnorm, y, 1.0)
+    if (!weights) return null
+
+    return { weights, means, stds, trainingSize: X.length }
+  }
+
+  /**
+   * Ridge regression via normal equation: w = (X^T X + λI)^{-1} X^T y
+   * λ applied to feature weights only, not bias.
+   */
+  private solveRidge(X: number[][], y: number[], lambda: number): number[] | null {
+    const n = X.length
+    const p = X[0].length
+
+    // X^T X
+    const XtX: number[][] = Array.from({ length: p }, () => new Array(p).fill(0))
+    for (let i = 0; i < p; i++) {
+      for (let j = i; j < p; j++) {
+        let sum = 0
+        for (let k = 0; k < n; k++) sum += X[k][i] * X[k][j]
+        XtX[i][j] = sum
+        XtX[j][i] = sum
+      }
+    }
+    // Ridge penalty on features, not bias
+    for (let i = 0; i < p - 1; i++) XtX[i][i] += lambda
+
+    // X^T y
+    const Xty: number[] = new Array(p).fill(0)
+    for (let i = 0; i < p; i++) {
+      let sum = 0
+      for (let k = 0; k < n; k++) sum += X[k][i] * y[k]
+      Xty[i] = sum
+    }
+
+    return this.gaussianSolve(XtX, Xty)
+  }
+
+  /** Gaussian elimination with partial pivoting. */
+  private gaussianSolve(A: number[][], b: number[]): number[] | null {
+    const n = A.length
+    const aug = A.map((row, i) => [...row, b[i]])
+
+    for (let col = 0; col < n; col++) {
+      let maxRow = col
+      for (let row = col + 1; row < n; row++) {
+        if (Math.abs(aug[row][col]) > Math.abs(aug[maxRow][col])) maxRow = row
+      }
+      ;[aug[col], aug[maxRow]] = [aug[maxRow], aug[col]]
+      if (Math.abs(aug[col][col]) < 1e-10) return null
+
+      for (let row = col + 1; row < n; row++) {
+        const factor = aug[row][col] / aug[col][col]
+        for (let j = col; j <= n; j++) aug[row][j] -= factor * aug[col][j]
+      }
+    }
+
+    const x = new Array(n).fill(0)
+    for (let i = n - 1; i >= 0; i--) {
+      x[i] = aug[i][n]
+      for (let j = i + 1; j < n; j++) x[i] -= aug[i][j] * x[j]
+      x[i] /= aug[i][i]
+    }
+    return x
+  }
+
+  /**
+   * Heuristic fallback: hand-tuned event scores with sigmoid mapping.
+   * Used when fewer than MIN_TRAINING_SAMPLES rated tracks have feedback.
+   */
+  private applyHeuristicRatings(): void {
+    const scoreMap: Record<string, (ev: number | null, src: string | null) => number> = {
+      'track_completed': () => 0.3,
+      'track_skipped': (ev) => -0.1 - 0.6 * (1 - (ev ?? 0)),
+      'track_started': (_ev, src) => {
+        if (src === 'search_play') return 0.5
+        if (src === 'intentional_select') return 0.2
+        return 0.0
+      },
+      'seek_backward': () => 0.4,
+      'seek_forward': () => -0.1,
+      'pause_abandon': () => -0.3,
+      'explicit_positive': () => 1.0,
+      'explicit_positive_not_now': () => 0.7,
+      'explicit_negative': () => -1.0,
+    }
+
+    const rows = this.db.prepare(
+      'SELECT track_id, event_type, event_value, attention_weight, source FROM track_feedback'
+    ).all() as { track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null }[]
+
+    const trackScores = new Map<string, { total: number; count: number }>()
+    for (const row of rows) {
+      const scorer = scoreMap[row.event_type]
+      if (!scorer) continue
+      const weighted = scorer(row.event_value, row.source) * row.attention_weight
+      const existing = trackScores.get(row.track_id)
+      if (existing) {
+        existing.total += weighted
+        existing.count++
+      } else {
+        trackScores.set(row.track_id, { total: weighted, count: 1 })
+      }
+    }
+
+    const update = this.db.prepare('UPDATE tracks SET inferred_rating = ? WHERE id = ?')
+    const clear = this.db.prepare(
+      'UPDATE tracks SET inferred_rating = NULL WHERE id NOT IN (SELECT DISTINCT track_id FROM track_feedback)'
+    )
+    const transaction = this.db.transaction(() => {
+      clear.run()
+      for (const [trackId, { total, count }] of trackScores) {
+        const normalized = total / Math.log2(count + 1)
+        const inferred = 5.0 / (1.0 + Math.exp(-normalized * 2))
+        update.run(Math.round(inferred * 100) / 100, trackId)
+      }
+    })
+    transaction()
+  }
+
+  /**
+   * Recompute inferred_rating for all tracks with feedback.
+   * Tries to fit a ridge regression from rated tracks' feedback → rating.
+   * Falls back to hand-tuned heuristic when training data is insufficient.
+   */
+  recomputeInferredRatings(): void {
+    const features = this.aggregateFeedbackFeatures()
+    if (features.size === 0) {
+      this.db.prepare('UPDATE tracks SET inferred_rating = NULL').run()
+      return
+    }
+
+    const model = this.fitRatingModel(features)
+    if (model) {
+      const { weights, means, stds, trainingSize } = model
+      const update = this.db.prepare('UPDATE tracks SET inferred_rating = ? WHERE id = ?')
+      const clear = this.db.prepare(
+        'UPDATE tracks SET inferred_rating = NULL WHERE id NOT IN (SELECT DISTINCT track_id FROM track_feedback)'
+      )
+      const transaction = this.db.transaction(() => {
+        clear.run()
+        for (const [trackId, feat] of features) {
+          const normed = feat.map((v, j) => (v - means[j]) / stds[j])
+          normed.push(1) // bias
+          let predicted = 0
+          for (let j = 0; j < weights.length; j++) predicted += normed[j] * weights[j]
+          const clamped = Math.round(Math.max(0, Math.min(5, predicted)) * 100) / 100
+          update.run(clamped, trackId)
+        }
+      })
+      transaction()
+      console.log(`Inferred ratings: learned model (${trainingSize} training pairs, ${features.size} predictions)`)
+    } else {
+      this.applyHeuristicRatings()
+      console.log(`Inferred ratings: heuristic fallback (${features.size} tracks, <${LibraryDatabase.MIN_TRAINING_SAMPLES} rated pairs)`)
+    }
   }
 
   close(): void {

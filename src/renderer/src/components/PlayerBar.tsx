@@ -14,7 +14,7 @@ export function PlayerBar(): React.JSX.Element {
     currentTrack, isPlaying, volume, queue, queueIndex,
     currentTime, duration, shuffle, repeatMode,
     togglePlayPause, nextTrack, prevTrack, setVolume, seekTo, setRating,
-    toggleShuffle, cycleRepeat
+    toggleShuffle, cycleRepeat, lovingThis, likeNotNow, notFeelingIt
   } = useLibraryStore()
 
   const handleSeek = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
@@ -60,9 +60,9 @@ export function PlayerBar(): React.JSX.Element {
         />
       </div>
 
-      {/* Controls */}
+      {/* Controls — unified transport + feedback strip */}
       <div className="flex-1 flex flex-col items-center gap-1">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <button
             onClick={toggleShuffle}
             className={`transition-colors cursor-pointer ${shuffle ? 'text-[#ffaa00]' : 'text-text-faint hover:text-text-primary'}`}
@@ -70,6 +70,16 @@ export function PlayerBar(): React.JSX.Element {
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
               <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z" />
+            </svg>
+          </button>
+          {/* Negative — thumbs down + skip */}
+          <button
+            onClick={notFeelingIt}
+            className="text-text-faint hover:text-red-400 transition-colors cursor-pointer"
+            title="Not feeling it (skip)"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z" />
             </svg>
           </button>
           <button
@@ -97,12 +107,32 @@ export function PlayerBar(): React.JSX.Element {
             )}
           </button>
           <button
-            onClick={nextTrack}
+            onClick={() => nextTrack('manual_skip')}
             className="text-text-faint hover:text-text-primary transition-colors cursor-pointer"
             disabled={queueIndex >= queue.length - 1}
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
               <path d="m6 18 8.5-6L6 6v12zm2 0h2V6h-2v12z" transform="scale(-1,1) translate(-24,0)" />
+            </svg>
+          </button>
+          {/* Positive — heart+skip, then heart (stay) */}
+          <button
+            onClick={likeNotNow}
+            className="text-text-faint hover:text-amber-400 transition-colors cursor-pointer"
+            title="Like, not now (skip)"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 1.5-.5 2.87-1.35 4h-2.9c1.25-1.1 2.25-2.4 2.25-4 0-2.22-1.78-3.5-3.5-3.5-1.17 0-2.28.63-3 1.57-.72-.94-1.83-1.57-3-1.57C5.78 5 4 6.28 4 8.5c0 3.08 3.08 5.74 8 10.18l.35-.32" />
+              <path d="M17 13l4 4M17 17l4-4" strokeWidth="2" stroke="currentColor" fill="none" strokeLinecap="round" />
+            </svg>
+          </button>
+          <button
+            onClick={lovingThis}
+            className="text-text-faint hover:text-green-400 transition-colors cursor-pointer"
+            title="Loving this"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" />
             </svg>
           </button>
           <button

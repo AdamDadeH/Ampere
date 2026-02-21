@@ -7,7 +7,8 @@ import { v4 as uuidv4 } from 'uuid'
 import { TrackUpsertData } from '../database'
 import { ensureEmbeddedId } from './tagger'
 import { parseArtists } from './artist-parser'
-import type { MetadataExtractor } from './index'
+import type { MetadataExtractor, SourceContext } from './index'
+import { isFileMaterialized, isProtonDrivePath } from '../storage/proton-drive'
 
 export class MusicMetadataExtractor implements MetadataExtractor {
   private artworkDir: string
@@ -20,7 +21,7 @@ export class MusicMetadataExtractor implements MetadataExtractor {
     await mkdir(this.artworkDir, { recursive: true })
   }
 
-  async extract(filePath: string, fileName: string, fileSize: number): Promise<{
+  async extract(filePath: string, fileName: string, fileSize: number, source?: SourceContext): Promise<{
     track: TrackUpsertData
     entities: { type: string; names: string[] }[]
   }> {
@@ -69,8 +70,9 @@ export class MusicMetadataExtractor implements MetadataExtractor {
       sample_rate: format.sampleRate || null,
       codec: format.codec || null,
       artwork_path: artworkPath,
-      sync_status: 'local',
-      cloud_path: null
+      sync_status: this.resolveSyncStatus(filePath, source),
+      cloud_path: this.resolveCloudPath(filePath, source),
+      source_id: source?.sourceId ?? null
     }
 
     // Try to read or write the embedded AMPERE_ID
@@ -86,5 +88,19 @@ export class MusicMetadataExtractor implements MetadataExtractor {
         { type: 'album_artist', names: parsedAlbumArtists },
       ]
     }
+  }
+
+  private resolveSyncStatus(filePath: string, source?: SourceContext): string {
+    if (source?.sourceType === 'proton-drive' || isProtonDrivePath(filePath)) {
+      return isFileMaterialized(filePath) ? 'cached' : 'cloud-only'
+    }
+    return 'local'
+  }
+
+  private resolveCloudPath(filePath: string, source?: SourceContext): string | null {
+    if (source?.sourceType === 'proton-drive' || isProtonDrivePath(filePath)) {
+      return filePath
+    }
+    return null
   }
 }

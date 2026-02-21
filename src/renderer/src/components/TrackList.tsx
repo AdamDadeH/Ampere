@@ -93,7 +93,7 @@ export function TrackList(): React.JSX.Element {
                   columns={columns}
                   isCurrentTrack={currentTrack?.id === track.id}
                   isPlaying={isPlaying && currentTrack?.id === track.id}
-                  onPlay={() => playTrack(track, tracks)}
+                  onPlay={() => playTrack(track, tracks, searchQuery ? 'search_play' : 'intentional_select')}
                 />
               ))}
             </tbody>

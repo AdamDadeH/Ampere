@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { getAttentionWeight } from './attention'
 
 export interface Track {
   id: string
@@ -26,6 +27,10 @@ export interface Track {
   date_modified: string
   sync_status: string
   cloud_path: string | null
+  last_accessed: string | null
+  pinned: number
+  source_id: string | null
+  inferred_rating: number | null
 }
 
 export interface ArtistInfo {
@@ -98,6 +103,9 @@ interface LibraryState {
   scanProgress: ScanProgress | null
   isScanning: boolean
 
+  // Cloud-first download state
+  downloadingTrackId: string | null
+
   // Navigation override — set by Riemann navigator for drift/walk modes
   driftNext: (() => void) | null
 
@@ -109,9 +117,9 @@ interface LibraryState {
   selectArtist: (artist: string) => void
   selectAlbum: (album: string, artist?: string) => void
   setSearchQuery: (query: string) => void
-  playTrack: (track: Track, trackList?: Track[]) => void
+  playTrack: (track: Track, trackList?: Track[], source?: string) => void
   togglePlayPause: () => void
-  nextTrack: () => void
+  nextTrack: (reason?: 'auto_advance' | 'manual_skip' | 'not_feeling_it' | 'like_not_now') => void
   prevTrack: () => void
   setVolume: (volume: number) => void
   setCurrentTime: (time: number) => void
@@ -127,6 +135,10 @@ interface LibraryState {
   setEqBand: (index: number, gain: number) => void
   setScanProgress: (progress: ScanProgress | null) => void
   setDriftNext: (fn: (() => void) | null) => void
+  recordFeedback: (trackId: string, eventType: string, eventValue: number | null, source: string | null) => void
+  lovingThis: () => void
+  likeNotNow: () => void
+  notFeelingIt: () => void
 }
 
 export const useLibraryStore = create<LibraryState>((set, get) => ({
@@ -155,6 +167,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   eqBands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   scanProgress: null,
   isScanning: false,
+  downloadingTrackId: null,
   driftNext: null,
 
   loadLibrary: async () => {
@@ -223,7 +236,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }
   },
 
-  playTrack: (track, trackList) => {
+  playTrack: (track, trackList, source) => {
     const list = trackList || get().tracks
     const index = list.findIndex(t => t.id === track.id)
     set({
@@ -232,14 +245,27 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       queue: list,
       queueIndex: index >= 0 ? index : 0
     })
+    get().recordFeedback(track.id, 'track_started', null, source || 'intentional_select')
   },
 
   togglePlayPause: () => {
     set(state => ({ isPlaying: !state.isPlaying }))
   },
 
-  nextTrack: () => {
-    const { queue, queueIndex, shuffle, driftNext } = get()
+  nextTrack: (reason) => {
+    const { queue, queueIndex, shuffle, driftNext, currentTrack, currentTime, duration } = get()
+
+    // Record feedback for the outgoing track
+    if (currentTrack) {
+      if (reason === 'auto_advance') {
+        const completion = duration > 0 ? currentTime / duration : 0
+        get().recordFeedback(currentTrack.id, 'track_completed', completion, null)
+      } else if (reason) {
+        const completion = duration > 0 ? currentTime / duration : 0
+        get().recordFeedback(currentTrack.id, 'track_skipped', completion, null)
+      }
+    }
+
     if (driftNext) {
       driftNext()
       return
@@ -260,11 +286,16 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     } else {
       return // end of queue, no wrap in nextTrack (repeat handled in AudioEngine)
     }
+    const incoming = queue[nextIndex]
     set({
-      currentTrack: queue[nextIndex],
+      currentTrack: incoming,
       queueIndex: nextIndex,
       isPlaying: true
     })
+
+    // Record track_started for incoming track
+    const incomingSource = shuffle ? 'shuffle' : 'auto_advance'
+    get().recordFeedback(incoming.id, 'track_started', null, incomingSource)
   },
 
   prevTrack: () => {
@@ -286,6 +317,15 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   setDuration: (duration) => set({ duration }),
 
   seekTo: (time) => {
+    const { currentTrack, currentTime } = get()
+    const delta = time - currentTime
+    if (currentTrack && Math.abs(delta) > 2) {
+      if (delta < 0) {
+        get().recordFeedback(currentTrack.id, 'seek_backward', Math.abs(delta), null)
+      } else {
+        get().recordFeedback(currentTrack.id, 'seek_forward', delta, null)
+      }
+    }
     set({ seekTarget: time })
   },
 
@@ -354,7 +394,32 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }
   },
 
-  setDriftNext: (fn) => set({ driftNext: fn })
+  setDriftNext: (fn) => set({ driftNext: fn }),
+
+  recordFeedback: (trackId, eventType, eventValue, source) => {
+    const weight = getAttentionWeight()
+    window.api.recordFeedback(trackId, eventType, eventValue, weight, source).catch(console.error)
+  },
+
+  lovingThis: () => {
+    const { currentTrack } = get()
+    if (!currentTrack) return
+    get().recordFeedback(currentTrack.id, 'explicit_positive', null, 'loving_this')
+  },
+
+  likeNotNow: () => {
+    const { currentTrack } = get()
+    if (!currentTrack) return
+    get().recordFeedback(currentTrack.id, 'explicit_positive_not_now', null, 'like_not_now')
+    get().nextTrack('like_not_now')
+  },
+
+  notFeelingIt: () => {
+    const { currentTrack } = get()
+    if (!currentTrack) return
+    get().recordFeedback(currentTrack.id, 'explicit_negative', null, 'not_feeling_it')
+    get().nextTrack('not_feeling_it')
+  }
 }))
 
 // Restore saved EQ state

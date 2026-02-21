@@ -386,17 +386,164 @@ The original PRD envisioned a cloud-first Proton Drive music manager. The app ha
 - **Packaging** (P3) — .dmg, auto-updater, GitHub Releases
 
 ### Parked (not the vision right now)
-- **Cloud sync / Proton Drive integration** — the app went local-first. Cloud sync may return someday but it's not the mission.
-- **Sync Manager UI** — dependent on cloud sync
-- **Cache eviction / storage management** — local-first means everything is local
+- **Cloud sync / Proton Drive integration** — ✅ DONE. Cloud-first storage is live. Proton Drive detected automatically, `fp-evict` Swift helper handles eviction via `FileManager.evictUbiquitousItem`, LRU cache manager with 8GB budget, download-on-demand for cloud-only tracks.
+- **Sync Manager UI** — basic cache stats IPC exists, UI not yet built
+- **Cache eviction / storage management** — ✅ Core eviction works. See backlog below for adaptive prefetch strategies.
 - **Metadata editing** — nice to have, not a priority over skin depth
 - **Mobile companion app** — way out
 - **Collaborative playlists** — way out
+
+### Backlog: Adaptive Cache & Prefetch Strategies
+
+**Problem:** Cloud-only tracks take 10-15s to download on first play. The cache manager currently does LRU eviction but no prefetch — it's reactive, not predictive.
+
+**Core abstraction:** Each sequencing/navigation mode provides probabilistic prefetch hints to the cache manager. A single interface unifies all modes:
+
+```typescript
+interface PrefetchProvider {
+  // Return the k most likely next tracks with estimated probability
+  prefetchCandidates(currentTrackId: string, k: number): { trackId: string; probability: number }[]
+}
+```
+
+The cache manager sorts by probability descending and downloads until a bandwidth/budget cap is reached. The provider doesn't need to be precise — "top 5 most likely" is plenty.
+
+**Sequencing strategies (each implements PrefetchProvider):**
+
+| Mode | Prefetch behavior | Probability shape |
+|------|------------------|-------------------|
+| Album sequential | Next 2-3 tracks in album | ~1.0 (near certain) |
+| Artist sequential | Next tracks by same artist | ~0.8 |
+| Playlist | Look ahead N tracks | ~1.0 (deterministic) |
+| Shuffle | Broader pool, lower individual probability | ~1/pool_size |
+| KNN drift (Riemann) | K nearest neighbors in manifold | Weighted by inverse distance |
+| KNN with human intervention | Top 5 options presented to user | ~0.2 each (uniform over choices) |
+
+**Human intervention modes shift the probability distribution.** KNN with 5 options means each gets ~0.2 instead of one getting ~1.0, so prefetch all 5. "Choose next" mode could present 3-5 candidates — all prefetched.
+
+**Each strategy provides:**
+- `prefetchCandidates(currentTrackId, k)` — probabilistic next-K
+- `next()` — deterministic next track (after selection)
+- `presentOptions()` — candidates for human intervention (optional)
+- `handleSelection(trackId)` — user picked from presented options (optional)
+
+**Cache manager integration:**
+- On track change, query active sequencing strategy for prefetch candidates
+- Download top candidates that aren't already cached (respecting bandwidth cap)
+- Eviction remains LRU with 8GB budget — prefetched tracks get `last_accessed` set, so they're fresh in the LRU
+- Over time, play count and rating could weight LRU (frequently played albums stay cached longer)
+
+**Future refinements:**
+- Album-aware eviction (don't orphan 1 track from a 12-track album)
+- File-size-aware eviction (evict one lossless album vs 10 compressed tracks for same space)
+- Time-of-day patterns (morning playlist stays cached overnight)
+- Bandwidth detection (prefetch more aggressively on fast connections)
+
+### Backlog: Implicit Feedback & Taste Inference
+
+**Problem:** Explicit ratings (1-5 stars) are high-signal but rare. Users almost never rate tracks. The real taste signal is buried in behavior — what you skip, what you let play, what makes you hit repeat. A rating system that depends on explicit input will always be sparse. One that infers from behavior is always collecting.
+
+**Feedback signals (implicit → explicit spectrum):**
+
+| Signal | Type | Valence | Noise level | Notes |
+|--------|------|---------|-------------|-------|
+| Auto-continue to next track | Implicit | Weakly positive | High | Could mean "great, in the flow" or "zoned out, not paying attention" |
+| Skip / Next | Implicit | Ambiguous | Very high | Could mean "hate it", "not right now", "already heard it today" |
+| "Not feeling it" button | Explicit-light | Negative | Low | Unambiguous negative without requiring a rating number. Advances to next track. |
+| "Loving this" button | Explicit-light | Strong positive | Low | Only ~5% click-through even when the user genuinely loves it. Doesn't change track — just records the signal. |
+| "Love it, but not right now" button | Explicit-light | Positive + context | Low | Positive on the track, negative on the sequencing. Advances to next. Valuable for separating taste from mood. |
+| Listen duration % | Implicit | Gradient | Medium | 95%+ completion = positive. <20% = negative. Middle is ambiguous. |
+| Repeat / play again soon | Implicit | Strong positive | Low | Re-selecting a track within a session is a strong signal |
+| Explicit rating (1-5) | Explicit | Direct | None | User override — always wins. But almost never given. |
+
+**Taste inference model:**
+
+Each signal contributes a weighted update to an inferred rating per track:
+
+```
+inferred_rating = f(
+  completion_rate_history,    // weighted average of listen durations
+  skip_rate,                  // fraction of plays that were skipped
+  explicit_negative_count,    // "not feeling it" presses
+  explicit_positive_count,    // "loving this" presses
+  replay_frequency,           // how often re-selected
+  recency_weight,             // recent signals matter more
+  explicit_rating_override    // if set, dominates
+)
+```
+
+The function doesn't need to be complex — a weighted sum with decay is a good start. The explicit rating override acts as a hard clamp when present.
+
+**Storage:**
+- New table `track_feedback` — append-only log of every feedback event: `(track_id, event_type, timestamp, context)`
+  - Context captures: what sequencing mode was active, time of day, session length, position in queue
+- Derived `inferred_rating` column on `tracks` table — recomputed periodically from feedback log
+- Existing `rating` column remains the explicit override
+
+**UI changes:**
+- Transport bar gets two new buttons alongside the existing controls:
+  - "Not feeling it" (thumbs down / skip with intent) — skips and records negative
+  - "Loving this" (heart / vibe) — records positive, keeps playing
+- Optional: "Love it, not now" as a long-press or modifier variant
+- These are *lightweight* — single tap, no modal, no number picking
+- Existing star rating stays available in track detail / context menu as the explicit override
+
+**Downstream consumers of inferred rating:**
+- LRU cache eviction (higher-rated tracks are stickier)
+- Prefetch priority (prefer tracks the user tends to enjoy)
+- Riemann navigator (could warp the manifold metric by taste — pull liked tracks closer)
+- Smart playlists ("tracks I love", "tracks I haven't decided on yet", "tracks I should revisit")
+- Sequencing strategies (avoid scheduling recently-negatived tracks)
+
+**Key design principles:**
+- Never lose a signal. The feedback log is append-only.
+- Inference is always running. The user doesn't need to do anything.
+- Explicit always wins. If the user sets 5 stars, the inference doesn't argue.
+- Feedback buttons are *cheaper* than ratings. One tap, no cognitive load, no "is this a 3 or a 4?"
+- Context matters. "Not feeling it" during a morning commute vs late-night deep listen are different signals.
+
+### Backlog: Liminal Space Visualizer (Generative)
+
+**The idea:** Replace waveform/shader visualizers with AI-generated liminal spaces driven by audio features. Not math-to-pixels — audio-to-meaning-to-images. The uncanny valley IS the aesthetic.
+
+**How it works:**
+- Audio feature extraction (already exists — 56-dim vectors: spectral centroid, MFCCs, RMS, chroma, ZCR) feeds into an image/video generation model
+- Features map to *semantic* properties of the generated space:
+  - Spectral centroid → emptiness, scale of architecture
+  - RMS/energy → lighting intensity, flickering
+  - MFCCs → architectural style, texture, material
+  - Chroma → color palette, time of day
+  - ZCR → decay, distortion, glitch artifacts
+- Output renders as a continuous visualization alongside playback
+
+**The chaos:** The viewer can't tell if the music is scoring the image or the image is generating the music. Causality dissolves. That's the point. Memetic image generation and audio fused so tightly they become one signal.
+
+**Model considerations:**
+- Needs to be fast enough for near-realtime (frame-by-frame or short clip generation)
+- Efficient local models preferred (SDXL Turbo, LCM, or similar low-step diffusion) — avoid API latency
+- img2img with previous frame as input for temporal coherence (dreamy drift between spaces)
+- Could also use video generation models (frame interpolation between keyframes)
+- ControlNet or IP-Adapter for style consistency within a track
+
+**Architecture sketch:**
+```
+AudioEngine → feature buffer (rolling window)
+    ↓
+Feature summarizer (reduce 56-dim to semantic prompts + controlnet params)
+    ↓
+Local diffusion model (SDXL Turbo / LCM, ~4 steps, <500ms per frame)
+    ↓
+Frame buffer → WebGL renderer (crossfade between generated frames)
+```
+
+**The vibe:** Empty swimming pools at 3am. Fluorescent-lit hallways that go nowhere. Abandoned malls where the music is the only thing that proves time still passes. Your entire library becomes a walk through spaces that shouldn't exist but feel like memories.
 
 ### The Pivot
 The PRD was practical. The app became something else — a vehicle for reviving the golden age of desktop customization. The skin engine, the visualizations, the pixel-perfect bitmap fonts — that's the soul. Everything else serves it.
 
 And then Riemann happened. The app isn't just reviving the past — it's building something that never existed: a music player where your library has geometry, where listening is navigation, where the space between songs is as meaningful as the songs themselves.
+
+And then the liminal spaces idea happened. The app isn't just navigating music — it's hallucinating the world the music implies.
 
 ---
 
