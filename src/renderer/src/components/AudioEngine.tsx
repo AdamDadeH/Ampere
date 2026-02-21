@@ -1,8 +1,9 @@
 import { useRef, useEffect, useCallback } from 'react'
 import { useLibraryStore } from '../stores/library'
 import type { PlayerState } from '../../../../preload/index'
+import { analyserBridge } from '../audio/analyser-bridge'
 
-const SPECTRUM_BINS = 32
+const SPECTRUM_BINS = 128
 const emptyFrequencyData: number[] = new Array(SPECTRUM_BINS).fill(0)
 
 // Standard 10-band Winamp EQ frequencies
@@ -100,7 +101,7 @@ export function AudioEngine(): React.JSX.Element {
 
       // Connect last filter to analyser too
       const analyser = ctx.createAnalyser()
-      analyser.fftSize = 64
+      analyser.fftSize = 256
       analyser.smoothingTimeConstant = 0.7
       prevNode.connect(analyser)
 
@@ -109,6 +110,7 @@ export function AudioEngine(): React.JSX.Element {
       preampGainRef.current = preamp
       eqFiltersRef.current = filters
       analyserRef.current = analyser
+      analyserBridge.node = analyser
       frequencyArrayRef.current = new Uint8Array(analyser.frequencyBinCount)
       audioInitRef.current = true
     } catch (e) {

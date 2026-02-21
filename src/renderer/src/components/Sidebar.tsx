@@ -64,6 +64,16 @@ export function Sidebar(): React.JSX.Element {
         >
           Navigator
         </button>
+        <button
+          onClick={() => setView('demoscene')}
+          className={`w-full text-left px-3 py-1.5 rounded text-sm cursor-pointer transition-colors ${
+            currentView === 'demoscene'
+              ? 'bg-bg-hover/60 text-text-primary'
+              : 'text-text-faint hover:text-text-primary hover:bg-bg-tertiary/60'
+          }`}
+        >
+          Visualizer
+        </button>
       </nav>
 
       {/* Entities */}

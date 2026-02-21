@@ -59,7 +59,7 @@ export interface LibraryStats {
   total_duration: number
 }
 
-type View = 'all-tracks' | 'artists' | 'albums' | 'artist-detail' | 'album-detail' | 'riemann'
+type View = 'all-tracks' | 'artists' | 'albums' | 'artist-detail' | 'album-detail' | 'riemann' | 'demoscene'
 type ArtistViewMode = 'track' | 'album'
 
 interface LibraryState {
