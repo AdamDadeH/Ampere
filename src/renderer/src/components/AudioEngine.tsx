@@ -1,8 +1,10 @@
 import { useRef, useEffect, useCallback } from 'react'
 import { useLibraryStore } from '../stores/library'
 import type { PlayerState } from '../../../../preload/index'
+import { analyserBridge } from '../audio/analyser-bridge'
+import { recordInteraction, setForeground } from '../stores/attention'
 
-const SPECTRUM_BINS = 32
+const SPECTRUM_BINS = 128
 const emptyFrequencyData: number[] = new Array(SPECTRUM_BINS).fill(0)
 
 // Standard 10-band Winamp EQ frequencies
@@ -55,6 +57,10 @@ export function AudioEngine(): React.JSX.Element {
   const frequencyArrayRef = useRef<Uint8Array | null>(null)
   const audioInitRef = useRef(false)
 
+  // Pause-abandon tracking
+  const pauseTimestampRef = useRef<number | null>(null)
+  const pausedTrackIdRef = useRef<string | null>(null)
+
   // Web Audio EQ chain refs
   const audioCtxRef = useRef<AudioContext | null>(null)
   const sourceRef = useRef<MediaElementAudioSourceNode | null>(null)
@@ -100,7 +106,7 @@ export function AudioEngine(): React.JSX.Element {
 
       // Connect last filter to analyser too
       const analyser = ctx.createAnalyser()
-      analyser.fftSize = 64
+      analyser.fftSize = 256
       analyser.smoothingTimeConstant = 0.7
       prevNode.connect(analyser)
 
@@ -109,6 +115,7 @@ export function AudioEngine(): React.JSX.Element {
       preampGainRef.current = preamp
       eqFiltersRef.current = filters
       analyserRef.current = analyser
+      analyserBridge.node = analyser
       frequencyArrayRef.current = new Uint8Array(analyser.frequencyBinCount)
       audioInitRef.current = true
     } catch (e) {
@@ -156,26 +163,55 @@ export function AudioEngine(): React.JSX.Element {
     setCurrentTime(0)
     setDuration(0)
 
-    window.api.getTrackPath(currentTrackId).then(url => {
-      if (url) {
-        audio.src = url
+    window.api.getTrackPath(currentTrackId).then(async (result) => {
+      if (!result) return
+
+      if (result.available) {
+        // File is on disk — play immediately
+        audio.src = result.url
         audio.play().then(() => {
           initAudioChain()
         }).catch(console.error)
-        // Immediately broadcast the new track info to compact window
         setTimeout(broadcastNow, 50)
+      } else {
+        // Cloud-only file — request download, then play when ready
+        useLibraryStore.setState({ downloadingTrackId: currentTrackId })
+        const ready = await window.api.requestTrackDownload(currentTrackId)
+        // Check we're still on the same track (user may have clicked another)
+        if (useLibraryStore.getState().currentTrack?.id !== currentTrackId) return
+        useLibraryStore.setState({ downloadingTrackId: null })
+
+        if (ready) {
+          audio.src = result.url
+          audio.play().then(() => {
+            initAudioChain()
+          }).catch(console.error)
+          setTimeout(broadcastNow, 50)
+        }
       }
     })
   }, [currentTrackId, setCurrentTime, setDuration, initAudioChain, broadcastNow])
 
-  // Play/pause sync
+  // Play/pause sync + pause-abandon tracking
   useEffect(() => {
     const audio = audioRef.current
     if (!audio || !currentTrackId) return
 
     if (isPlaying) {
+      // Check for pause-abandon: was a different track playing when we paused > 30s ago?
+      if (pauseTimestampRef.current && pausedTrackIdRef.current) {
+        const pauseDuration = (Date.now() - pauseTimestampRef.current) / 1000
+        if (pauseDuration > 30 && pausedTrackIdRef.current !== currentTrackId) {
+          const store = useLibraryStore.getState()
+          store.recordFeedback(pausedTrackIdRef.current, 'pause_abandon', pauseDuration, null)
+        }
+      }
+      pauseTimestampRef.current = null
+      pausedTrackIdRef.current = null
       audio.play().catch(console.error)
     } else {
+      pauseTimestampRef.current = Date.now()
+      pausedTrackIdRef.current = currentTrackId
       audio.pause()
     }
   }, [isPlaying, currentTrackId])
@@ -228,12 +264,12 @@ export function AudioEngine(): React.JSX.Element {
     }
 
     if (shuffle) {
-      nextTrack()
+      nextTrack('auto_advance')
       return
     }
 
     if (queueIndex < queue.length - 1) {
-      nextTrack()
+      nextTrack('auto_advance')
     } else if (repeatMode === 'all' && queue.length > 0) {
       useLibraryStore.setState({
         currentTrack: queue[0],
@@ -269,7 +305,16 @@ export function AudioEngine(): React.JSX.Element {
           store.togglePlayPause()
           break
         case 'next':
-          store.nextTrack()
+          store.nextTrack('manual_skip')
+          break
+        case 'loving-this':
+          store.lovingThis()
+          break
+        case 'like-not-now':
+          store.likeNotNow()
+          break
+        case 'not-feeling-it':
+          store.notFeelingIt()
           break
         case 'prev':
           store.prevTrack()
@@ -332,6 +377,29 @@ export function AudioEngine(): React.JSX.Element {
       }
     })
     return unsubscribe
+  }, [])
+
+  // Attention tracking: record user interactions and foreground state
+  useEffect(() => {
+    const onInteraction = (): void => recordInteraction()
+    const onFocus = (): void => setForeground(true)
+    const onBlur = (): void => setForeground(false)
+
+    window.addEventListener('click', onInteraction)
+    window.addEventListener('keydown', onInteraction)
+    window.addEventListener('wheel', onInteraction)
+    window.addEventListener('mousedown', onInteraction)
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('blur', onBlur)
+
+    return () => {
+      window.removeEventListener('click', onInteraction)
+      window.removeEventListener('keydown', onInteraction)
+      window.removeEventListener('wheel', onInteraction)
+      window.removeEventListener('mousedown', onInteraction)
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('blur', onBlur)
+    }
   }, [])
 
   return (

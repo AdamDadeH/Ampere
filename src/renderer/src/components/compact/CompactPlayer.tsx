@@ -202,6 +202,42 @@ export function CompactPlayer(): React.JSX.Element {
           easterEgg={easterEgg}
           skin={skin}
         />
+        <div className="compact-feedback" style={{ display: 'flex', justifyContent: 'center', gap: '8px', padding: '2px 0' }}>
+          <button
+            onClick={() => sendCommand('loving-this')}
+            title="Loving this"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#888', padding: '2px' }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#4ade80' }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#888' }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" />
+            </svg>
+          </button>
+          <button
+            onClick={() => sendCommand('like-not-now')}
+            title="Like, not now"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#888', padding: '2px' }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#fbbf24' }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#888' }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 1.5-.5 2.87-1.35 4h-2.9c1.25-1.1 2.25-2.4 2.25-4 0-2.22-1.78-3.5-3.5-3.5-1.17 0-2.28.63-3 1.57-.72-.94-1.83-1.57-3-1.57C5.78 5 4 6.28 4 8.5c0 3.08 3.08 5.74 8 10.18l.35-.32" />
+              <path d="M17 13l4 4M17 17l4-4" strokeWidth="2" stroke="currentColor" fill="none" strokeLinecap="round" />
+            </svg>
+          </button>
+          <button
+            onClick={() => sendCommand('not-feeling-it')}
+            title="Not feeling it"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#888', padding: '2px' }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#f87171' }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#888' }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z" />
+            </svg>
+          </button>
+        </div>
         <div className="compact-controls">
           <CompactTransport
             isPlaying={state.isPlaying}

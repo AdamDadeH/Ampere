@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, protocol, net, session } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, protocol, net } from 'electron'
 import { join, extname } from 'path'
 import { pathToFileURL } from 'url'
 import { createReadStream, readFileSync, statSync } from 'fs'
@@ -8,6 +8,9 @@ import { LocalStorageProvider } from './storage/local-provider'
 import { AUDIO_EXTENSIONS } from './storage/provider'
 import { FolderScanner } from './scanner'
 import { MusicMetadataExtractor } from './scanner/music-extractor'
+import { detectProtonDrive, isProtonDrivePath, isFileMaterialized, requestDownload, waitForMaterialization } from './storage/proton-drive'
+import { autoRegisterProtonDriveSources, findSourceForPath, getSourceTypeForPath } from './storage/sources'
+import { CacheManager } from './storage/cache-manager'
 
 const MIME_TYPES: Record<string, string> = {
   '.mp3': 'audio/mpeg',
@@ -27,10 +30,15 @@ const MIME_TYPES: Record<string, string> = {
 
 let db: LibraryDatabase
 let scanner: FolderScanner
+let cacheManager: CacheManager
 let mainWindow: BrowserWindow | null = null
 let compactWindow: BrowserWindow | null = null
 let audioServer: Server | null = null
 let audioServerPort = 0
+let inferredRatingInterval: ReturnType<typeof setInterval> | null = null
+
+// Track active downloads so we don't double-trigger
+const activeDownloads = new Map<string, Promise<boolean>>()
 
 function startAudioServer(): Promise<number> {
   return new Promise((resolve) => {
@@ -38,7 +46,7 @@ function startAudioServer(): Promise<number> {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, OPTIONS',
       'Access-Control-Allow-Headers': 'Range',
-      'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length, Content-Type'
+      'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length, Content-Type, X-Download-Status'
     }
 
     audioServer = createServer((req, res) => {
@@ -59,6 +67,15 @@ function startAudioServer(): Promise<number> {
       const ext = extname(filePath).toLowerCase()
       const mimeType = MIME_TYPES[ext] || 'application/octet-stream'
 
+      // For Proton Drive files, check if materialized before attempting to serve
+      if (isProtonDrivePath(filePath) && !isFileMaterialized(filePath)) {
+        res.writeHead(202, { ...CORS_HEADERS, 'X-Download-Status': 'downloading' })
+        res.end()
+        // Trigger download in background (if not already in progress)
+        triggerDownload(filePath)
+        return
+      }
+
       let stat
       try {
         stat = statSync(filePath)
@@ -66,6 +83,11 @@ function startAudioServer(): Promise<number> {
         res.writeHead(404, CORS_HEADERS)
         res.end('File not found')
         return
+      }
+
+      // Touch the file for LRU cache tracking
+      if (isProtonDrivePath(filePath)) {
+        touchFileByPath(filePath)
       }
 
       const range = req.headers.range
@@ -102,6 +124,60 @@ function startAudioServer(): Promise<number> {
       resolve(port)
     })
   })
+}
+
+/** Trigger a download for a cloud-only file, deduplicating concurrent requests */
+function triggerDownload(filePath: string): Promise<boolean> {
+  const existing = activeDownloads.get(filePath)
+  if (existing) return existing
+
+  const promise = (async () => {
+    try {
+      await requestDownload(filePath)
+      const result = await waitForMaterialization(filePath, 60_000)
+      if (result && db) {
+        const track = db.getTrackByPath(filePath)
+        if (track) {
+          db.updateSyncStatus(track.id, 'cached')
+          notifyDownloadComplete(track.id)
+        }
+      }
+      return result
+    } finally {
+      activeDownloads.delete(filePath)
+    }
+  })()
+
+  activeDownloads.set(filePath, promise)
+  return promise
+}
+
+/** Update last_accessed for a file by looking up its track ID */
+function touchFileByPath(filePath: string): void {
+  // This is called from the audio server hot path — keep it lightweight.
+  // We'll batch these or do them async in the future if needed.
+  try {
+    cacheManager?.touchByPath(filePath)
+  } catch {
+    // Non-fatal
+  }
+}
+
+/** Notify renderer that a download completed */
+function notifyDownloadComplete(trackId: string): void {
+  const windows = [mainWindow, compactWindow]
+  for (const win of windows) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('download-complete', trackId)
+    }
+  }
+}
+
+/** Notify renderer of download progress */
+function notifyDownloadProgress(trackId: string, progress: number): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('download-progress', { trackId, progress })
+  }
 }
 
 function createWindow(): void {
@@ -184,8 +260,14 @@ function setupIPC(): void {
     if (result.canceled || result.filePaths.length === 0) return null
     const folderPath = result.filePaths[0]
 
+    // Determine source context for the selected folder
+    const source = findSourceForPath(db, folderPath)
+    const sourceContext = source
+      ? { sourceId: source.id, sourceType: source.type as 'local' | 'proton-drive' }
+      : { sourceId: null, sourceType: getSourceTypeForPath(folderPath) }
+
     // Start scanning in background
-    scanner.scan(folderPath, mainWindow).catch(err => {
+    scanner.scan(folderPath, mainWindow, sourceContext).catch(err => {
       console.error('Scan failed:', err)
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('scan-progress', {
@@ -226,8 +308,16 @@ function setupIPC(): void {
   ipcMain.handle('get-track-path', (_event, trackId: string) => {
     const track = db.getTrack(trackId)
     if (!track) return null
-    // Return URL to local audio server
-    return `http://127.0.0.1:${audioServerPort}/${encodeURIComponent(track.file_path)}`
+
+    const isPD = isProtonDrivePath(track.file_path)
+    const materialized = isPD ? isFileMaterialized(track.file_path) : true
+
+    return {
+      url: `http://127.0.0.1:${audioServerPort}/${encodeURIComponent(track.file_path)}`,
+      available: materialized,
+      downloading: activeDownloads.has(track.file_path),
+      syncStatus: track.sync_status
+    }
   })
 
   ipcMain.handle('update-play-count', (_event, trackId: string) => {
@@ -310,9 +400,79 @@ function setupIPC(): void {
     db.bulkSetUmapCoords(coords)
   })
   ipcMain.handle('get-feature-count', () => db.getFeatureCount())
-  ipcMain.handle('read-audio-file', (_event, filePath: string) => {
+  ipcMain.handle('read-audio-file', async (_event, filePath: string) => {
+    // For Proton Drive files, ensure materialized before reading
+    if (isProtonDrivePath(filePath) && !isFileMaterialized(filePath)) {
+      await requestDownload(filePath)
+      const ready = await waitForMaterialization(filePath, 30_000)
+      if (!ready) throw new Error(`Timed out waiting for file download: ${filePath}`)
+    }
     const data = readFileSync(filePath)
     return data.buffer
+  })
+
+  // Cloud-first: download request from renderer
+  ipcMain.handle('request-track-download', async (_event, trackId: string) => {
+    const track = db.getTrack(trackId)
+    if (!track) return false
+
+    if (!isProtonDrivePath(track.file_path)) return true // Already local
+    if (isFileMaterialized(track.file_path)) {
+      db.updateSyncStatus(trackId, 'cached')
+      return true
+    }
+
+    db.updateSyncStatus(trackId, 'downloading')
+    const result = await triggerDownload(track.file_path)
+    if (result) {
+      db.updateSyncStatus(trackId, 'cached')
+    }
+    return result
+  })
+
+  // Cloud-first: storage source management
+  ipcMain.handle('detect-proton-drive', () => detectProtonDrive())
+
+  ipcMain.handle('get-storage-sources', () => db.getStorageSources())
+
+  ipcMain.handle('add-storage-source', (_event, source: { id: string; type: string; root_path: string; label?: string; proton_email?: string }) => {
+    db.addStorageSource(source)
+  })
+
+  ipcMain.handle('remove-storage-source', (_event, sourceId: string) => {
+    db.removeStorageSource(sourceId)
+  })
+
+  // Cloud-first: cache management
+  ipcMain.handle('get-cache-stats', () => db.getCacheStats())
+
+  ipcMain.handle('set-cache-limit', (_event, bytes: number) => {
+    cacheManager.setMaxSize(bytes)
+  })
+
+  ipcMain.handle('pin-track', (_event, trackId: string) => {
+    db.pinTrack(trackId)
+  })
+
+  ipcMain.handle('unpin-track', (_event, trackId: string) => {
+    db.unpinTrack(trackId)
+  })
+
+  ipcMain.handle('evict-cache', async () => {
+    return cacheManager.evict()
+  })
+
+  // Feedback
+  ipcMain.handle('record-feedback', (_event, trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null) => {
+    db.recordFeedback(trackId, eventType, eventValue, attentionWeight, source)
+  })
+
+  ipcMain.handle('get-track-feedback', (_event, trackId: string) => {
+    return db.getTrackFeedback(trackId)
+  })
+
+  ipcMain.handle('recompute-inferred-ratings', () => {
+    db.recomputeInferredRatings()
   })
 
   ipcMain.on('remote-player-command', (_event, command: string, ...args: unknown[]) => {
@@ -348,8 +508,45 @@ app.whenReady().then(async () => {
   const extractor = new MusicMetadataExtractor()
   scanner = new FolderScanner(db, provider, extractor)
 
+  // Cloud-first: auto-detect Proton Drive sources and migrate existing tracks
+  const newSources = autoRegisterProtonDriveSources(db)
+  for (const source of newSources) {
+    const migrated = db.migrateProtonDriveSyncStatus(source.root_path, source.id)
+    if (migrated > 0) {
+      console.log(`Cloud-first: migrated ${migrated} existing tracks to source "${source.label}" (sync_status: local → cached)`)
+    }
+  }
+  // Also handle already-registered sources that haven't had their tracks migrated yet
+  const allSources = db.getStorageSources()
+  for (const source of allSources) {
+    if (source.type === 'proton-drive') {
+      const migrated = db.migrateProtonDriveSyncStatus(source.root_path, source.id)
+      if (migrated > 0) {
+        console.log(`Cloud-first: migrated ${migrated} additional tracks for source "${source.label}"`)
+      }
+    }
+  }
+
+  // Initialize cache manager and run initial eviction pass
+  cacheManager = new CacheManager(db)
+  cacheManager.evict().then(({ evicted, freedBytes }) => {
+    if (evicted > 0) {
+      console.log(`Startup eviction: freed ${(freedBytes / 1024 / 1024).toFixed(1)} MB (${evicted} files)`)
+    }
+  }).catch(err => console.error('Startup eviction failed:', err))
+
   setupIPC()
   createWindow()
+
+  // Deferred startup recompute of inferred ratings
+  setTimeout(() => {
+    try { db.recomputeInferredRatings() } catch (e) { console.error('Startup inferred rating recompute failed:', e) }
+  }, 5000)
+
+  // Recompute inferred ratings every 10 minutes
+  inferredRatingInterval = setInterval(() => {
+    try { db.recomputeInferredRatings() } catch (e) { console.error('Periodic inferred rating recompute failed:', e) }
+  }, 10 * 60 * 1000)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -369,6 +566,8 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  if (inferredRatingInterval) clearInterval(inferredRatingInterval)
+  cacheManager?.stop()
   db?.close()
   audioServer?.close()
 })

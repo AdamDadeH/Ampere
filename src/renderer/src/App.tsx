@@ -7,6 +7,7 @@ import { SetupView } from './components/SetupView'
 import { AudioEngine } from './components/AudioEngine'
 import { CompactPlayer } from './components/compact/CompactPlayer'
 import { RiemannNavigator } from './riemann/RiemannNavigator'
+import { DemosceneVisualizer } from './visualizer/DemosceneVisualizer'
 import './stores/theme' // Initialize theme before render
 
 const isCompactMode = new URLSearchParams(window.location.search).has('mode')
@@ -42,7 +43,7 @@ function LibraryApp(): React.JSX.Element {
         <>
           <div className="flex-1 flex min-h-0">
             <Sidebar />
-            {currentView === 'riemann' ? <RiemannNavigator /> : <TrackList />}
+            {currentView === 'riemann' ? <RiemannNavigator /> : currentView === 'demoscene' ? <DemosceneVisualizer /> : <TrackList />}
           </div>
           <PlayerBar />
         </>

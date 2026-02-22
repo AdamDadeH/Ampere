@@ -92,6 +92,28 @@ CREATE TABLE IF NOT EXISTS track_features (
   computed_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS storage_sources (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  root_path TEXT NOT NULL,
+  label TEXT,
+  proton_email TEXT,
+  added_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS track_feedback (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  track_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  event_value REAL,
+  attention_weight REAL NOT NULL DEFAULT 1.0,
+  source TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_track ON track_feedback(track_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_created ON track_feedback(created_at);
 `
 
 // Bump this when derived tables (track_artists, track_album_artists) need rebuilding.
