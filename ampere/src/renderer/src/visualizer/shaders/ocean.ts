@@ -2,6 +2,7 @@
  * FBM ocean — layered wave octaves with raymarched water surface.
  * Technique from Seascape (Alexander Alekseev / TDM).
  * Multiple noise octaves at decreasing amplitude create realistic waves.
+ * @source https://www.shadertoy.com/view/Ms2SD1
  */
 
 export const fragmentSource = `#version 300 es

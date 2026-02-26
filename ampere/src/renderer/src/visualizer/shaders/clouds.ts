@@ -2,6 +2,7 @@
  * Volumetric nebula — FBM noise fields raymarched as density volumes.
  * Technique inspired by nimitz (Protean Clouds).
  * Multiple noise octaves at decreasing weight build smooth density.
+ * @source https://www.shadertoy.com/view/3l23Rh
  */
 
 export const fragmentSource = `#version 300 es

@@ -712,6 +712,17 @@ export function RiemannNavigator(): React.JSX.Element {
     }
   }, [tracks, playTrack, drifting])
 
+  // Prefetch KNN neighbors when drifting and current track changes
+  useEffect(() => {
+    if (!drifting || !currentTrack) return
+    const s = sceneRef.current
+    if (!s?.knn) return
+    const neighborIds = s.knn.neighbors.get(currentTrack.id)
+    if (neighborIds && neighborIds.length > 0) {
+      window.api.prefetchTracks(neighborIds.slice(0, 5)).catch(console.error)
+    }
+  }, [drifting, currentTrack])
+
   // Compute labeled neighbors when current track changes
   useEffect(() => {
     const s = sceneRef.current

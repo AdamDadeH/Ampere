@@ -1,5 +1,5 @@
 {
   "name": "proton-apps",
   "private": true,
-  "workspaces": ["shared", "ampere"]
+  "workspaces": ["shared", "ampere", "comics"]
 }

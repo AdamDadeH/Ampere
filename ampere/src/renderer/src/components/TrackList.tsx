@@ -1,6 +1,7 @@
-import React from 'react'
+import React, { useState, useCallback } from 'react'
 import { useLibraryStore, Track } from '../stores/library'
 import { AlbumArt } from './AlbumArt'
+import { ContextMenu, ContextMenuItem } from './ContextMenu'
 import { musicAdapter } from '../../../shared/adapters/music'
 import type { ColumnDef } from '../../../shared/media-adapter'
 
@@ -12,12 +13,25 @@ function formatDuration(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
+interface ContextMenuState {
+  x: number
+  y: number
+  trackId: string
+}
+
 export function TrackList(): React.JSX.Element {
   const {
     tracks, currentTrack, isPlaying, currentView,
     selectedArtist, selectedAlbum, searchQuery,
-    playTrack, setView, setSearchQuery
+    playTrack, setView, setSearchQuery, togglePin
   } = useLibraryStore()
+
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, trackId: string) => {
+    e.preventDefault()
+    setContextMenu({ x: e.clientX, y: e.clientY, trackId })
+  }, [])
 
   const title = (() => {
     if (searchQuery) return `Search: "${searchQuery}"`
@@ -29,6 +43,15 @@ export function TrackList(): React.JSX.Element {
 
   // Filter columns: title is rendered specially (with artwork), rating has a custom renderer
   const columns = adapter.columns
+
+  const contextTrack = contextMenu ? tracks.find(t => t.id === contextMenu.trackId) : null
+  const contextMenuItems: ContextMenuItem[] = contextTrack ? [
+    {
+      label: contextTrack.pinned === 1 ? 'Unpin' : 'Keep Local',
+      icon: contextTrack.pinned === 1 ? '\u{1F4CC}' : '\u{1F4E5}',
+      onClick: () => togglePin(contextTrack.id)
+    }
+  ] : []
 
   return (
     <div className="flex-1 flex flex-col h-full">
@@ -94,6 +117,7 @@ export function TrackList(): React.JSX.Element {
                   isCurrentTrack={currentTrack?.id === track.id}
                   isPlaying={isPlaying && currentTrack?.id === track.id}
                   onPlay={() => playTrack(track, tracks, searchQuery ? 'search_play' : 'intentional_select')}
+                  onContextMenu={handleContextMenu}
                 />
               ))}
             </tbody>
@@ -105,12 +129,22 @@ export function TrackList(): React.JSX.Element {
           )}
         </div>
       )}
+
+      {/* Context menu */}
+      {contextMenu && contextMenuItems.length > 0 && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenuItems}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   )
 }
 
 function TrackRow({
-  track, index, columns, isCurrentTrack, isPlaying, onPlay
+  track, index, columns, isCurrentTrack, isPlaying, onPlay, onContextMenu
 }: {
   track: Track
   index: number
@@ -118,6 +152,7 @@ function TrackRow({
   isCurrentTrack: boolean
   isPlaying: boolean
   onPlay: () => void
+  onContextMenu: (e: React.MouseEvent, trackId: string) => void
 }): React.JSX.Element {
   return (
     <tr
@@ -127,6 +162,7 @@ function TrackRow({
           : 'hover:bg-bg-tertiary/50 text-text-secondary'
       }`}
       onDoubleClick={onPlay}
+      onContextMenu={(e) => onContextMenu(e, track.id)}
     >
       {columns.map(col => (
         <td
@@ -191,6 +227,11 @@ function CellContent({
         <span className={`truncate ${isCurrentTrack ? 'text-accent-text font-medium' : 'text-text-primary'}`}>
           {(value as string) || track.file_name}
         </span>
+        {track.pinned === 1 && (
+          <span className="text-text-faint text-[10px] shrink-0" title="Pinned (kept local)">
+            &#x1F4CC;
+          </span>
+        )}
       </div>
     )
   }
@@ -257,7 +298,34 @@ function StarRatingInline({ trackId, rating }: { trackId: string; rating: number
 }
 
 function AlbumGrid(): React.JSX.Element {
-  const { albums, selectAlbum } = useLibraryStore()
+  const { albums, tracks, selectAlbum, togglePin } = useLibraryStore()
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; album: string; artist?: string } | null>(null)
+
+  const handleAlbumContext = useCallback((e: React.MouseEvent, album: string, artist?: string) => {
+    e.preventDefault()
+    setContextMenu({ x: e.clientX, y: e.clientY, album, artist })
+  }, [])
+
+  const pinAllAlbumTracks = useCallback(async () => {
+    if (!contextMenu) return
+    const albumTracks = tracks.filter(t =>
+      t.album === contextMenu.album &&
+      (contextMenu.artist ? (t.artist === contextMenu.artist || t.album_artist === contextMenu.artist) : true)
+    )
+    for (const track of albumTracks) {
+      if (track.pinned !== 1) {
+        await togglePin(track.id)
+      }
+    }
+  }, [contextMenu, tracks, togglePin])
+
+  const albumMenuItems: ContextMenuItem[] = contextMenu ? [
+    {
+      label: 'Keep All Local',
+      icon: '\u{1F4E5}',
+      onClick: pinAllAlbumTracks
+    }
+  ] : []
 
   return (
     <div className="flex-1 overflow-y-auto px-6">
@@ -266,6 +334,7 @@ function AlbumGrid(): React.JSX.Element {
           <button
             key={`${album.album}-${album.album_artist || album.artist}`}
             onClick={() => selectAlbum(album.album, album.artist || album.album_artist || undefined)}
+            onContextMenu={(e) => handleAlbumContext(e, album.album, album.artist || album.album_artist || undefined)}
             className="text-left group cursor-pointer"
           >
             <AlbumArt
@@ -282,6 +351,14 @@ function AlbumGrid(): React.JSX.Element {
       </div>
       {albums.length === 0 && (
         <div className="text-center text-text-muted py-20">No albums found</div>
+      )}
+      {contextMenu && albumMenuItems.length > 0 && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={albumMenuItems}
+          onClose={() => setContextMenu(null)}
+        />
       )}
     </div>
   )

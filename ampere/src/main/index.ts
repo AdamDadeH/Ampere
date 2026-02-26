@@ -473,6 +473,30 @@ function setupIPC(): void {
     return cacheManager.evict()
   })
 
+  // Prefetch: fire-and-forget download of upcoming tracks
+  ipcMain.handle('prefetch-tracks', async (_event, trackIds: string[]) => {
+    const results: Record<string, string> = {}
+    for (const trackId of trackIds) {
+      const track = db.getTrack(trackId)
+      if (!track) {
+        results[trackId] = 'not_found'
+        continue
+      }
+      if (!isProtonDrivePath(track.file_path)) {
+        results[trackId] = 'local'
+        continue
+      }
+      if (isFileMaterialized(track.file_path)) {
+        results[trackId] = 'cached'
+        continue
+      }
+      // Trigger download (deduplicates via activeDownloads)
+      triggerDownload(track.file_path)
+      results[trackId] = 'downloading'
+    }
+    return results
+  })
+
   // Feedback
   ipcMain.handle('record-feedback', (_event, trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null) => {
     db.recordFeedback(trackId, eventType, eventValue, attentionWeight, source)

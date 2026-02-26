@@ -3,6 +3,7 @@
  * Technique from Creation (Danilo Guanabara / Silexars).
  * Famous for being ultra-compact yet producing endlessly smooth evolution.
  * This version adds audio-reactive modulation to the iteration parameters.
+ * @source https://www.shadertoy.com/view/XsXXDn
  */
 
 export const fragmentSource = `#version 300 es

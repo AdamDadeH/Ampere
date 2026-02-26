@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { getAttentionWeight } from './attention'
+import { buildShufflePermutation } from '../utils/shuffle'
 
 export interface Track {
   id: string
@@ -92,6 +93,8 @@ interface LibraryState {
   duration: number
   seekTarget: number | null
   shuffle: boolean
+  shuffledIndices: number[]
+  shufflePosition: number
   repeatMode: 'off' | 'one' | 'all'
 
   // EQ
@@ -135,6 +138,8 @@ interface LibraryState {
   setEqBand: (index: number, gain: number) => void
   setScanProgress: (progress: ScanProgress | null) => void
   setDriftNext: (fn: (() => void) | null) => void
+  getUpcomingTrackIds: (count: number) => string[]
+  togglePin: (trackId: string) => Promise<void>
   recordFeedback: (trackId: string, eventType: string, eventValue: number | null, source: string | null) => void
   lovingThis: () => void
   likeNotNow: () => void
@@ -162,6 +167,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   duration: 0,
   seekTarget: null,
   shuffle: false,
+  shuffledIndices: [],
+  shufflePosition: -1,
   repeatMode: 'off',
   eqEnabled: false,
   eqPreamp: 0,
@@ -240,12 +247,43 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   playTrack: (track, trackList, source) => {
     const list = trackList || get().tracks
     const index = list.findIndex(t => t.id === track.id)
-    set({
-      currentTrack: track,
-      isPlaying: true,
-      queue: list,
-      queueIndex: index >= 0 ? index : 0
-    })
+    const seqIndex = index >= 0 ? index : 0
+    const { shuffle, queue } = get()
+
+    if (shuffle) {
+      // Check if queue identity changed
+      const queueChanged = list !== queue || list.length !== queue.length
+      if (queueChanged) {
+        // New queue — regenerate permutation with this track at position 0
+        const perm = buildShufflePermutation(list.length, seqIndex, list.map(t => t.id))
+        set({
+          currentTrack: track,
+          isPlaying: true,
+          queue: list,
+          queueIndex: seqIndex,
+          shuffledIndices: perm,
+          shufflePosition: 0
+        })
+      } else {
+        // Same queue — find selected track in permutation
+        const { shuffledIndices } = get()
+        const posInPerm = shuffledIndices.indexOf(seqIndex)
+        set({
+          currentTrack: track,
+          isPlaying: true,
+          queue: list,
+          queueIndex: seqIndex,
+          shufflePosition: posInPerm >= 0 ? posInPerm : 0
+        })
+      }
+    } else {
+      set({
+        currentTrack: track,
+        isPlaying: true,
+        queue: list,
+        queueIndex: seqIndex
+      })
+    }
     get().recordFeedback(track.id, 'track_started', null, source || 'intentional_select')
   },
 
@@ -254,7 +292,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
 
   nextTrack: (reason) => {
-    const { queue, queueIndex, shuffle, driftNext, currentTrack, currentTime, duration } = get()
+    const { queue, queueIndex, shuffle, shuffledIndices, shufflePosition, repeatMode, driftNext, currentTrack, currentTime, duration } = get()
 
     // Record feedback for the outgoing track
     if (currentTrack) {
@@ -272,25 +310,40 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       return
     }
     if (queue.length === 0) return
-    let nextIndex: number
+
+    let nextQueueIndex: number
+    let newShufflePosition = shufflePosition
+
     if (shuffle) {
-      // Pick a random index different from current (if possible)
-      if (queue.length === 1) {
-        nextIndex = 0
+      const nextPos = shufflePosition + 1
+      if (nextPos < shuffledIndices.length) {
+        newShufflePosition = nextPos
+        nextQueueIndex = shuffledIndices[nextPos]
+      } else if (repeatMode === 'all') {
+        // Exhausted — regenerate permutation
+        const perm = buildShufflePermutation(queue.length, queueIndex, queue.map(t => t.id))
+        set({ shuffledIndices: perm })
+        newShufflePosition = 0
+        nextQueueIndex = perm[0]
       } else {
-        do {
-          nextIndex = Math.floor(Math.random() * queue.length)
-        } while (nextIndex === queueIndex)
+        // End of shuffle, no repeat
+        set({ isPlaying: false })
+        return
       }
     } else if (queueIndex < queue.length - 1) {
-      nextIndex = queueIndex + 1
+      nextQueueIndex = queueIndex + 1
+    } else if (repeatMode === 'all') {
+      nextQueueIndex = 0
     } else {
-      return // end of queue, no wrap in nextTrack (repeat handled in AudioEngine)
+      set({ isPlaying: false })
+      return
     }
-    const incoming = queue[nextIndex]
+
+    const incoming = queue[nextQueueIndex]
     set({
       currentTrack: incoming,
-      queueIndex: nextIndex,
+      queueIndex: nextQueueIndex,
+      shufflePosition: newShufflePosition,
       isPlaying: true
     })
 
@@ -300,14 +353,30 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
 
   prevTrack: () => {
-    const { queue, queueIndex } = get()
-    if (queueIndex > 0) {
-      const prevIndex = queueIndex - 1
-      set({
-        currentTrack: queue[prevIndex],
-        queueIndex: prevIndex,
-        isPlaying: true
-      })
+    const { queue, shuffle, shuffledIndices, shufflePosition } = get()
+    if (queue.length === 0) return
+
+    if (shuffle) {
+      if (shufflePosition > 0) {
+        const prevPos = shufflePosition - 1
+        const prevQueueIndex = shuffledIndices[prevPos]
+        set({
+          currentTrack: queue[prevQueueIndex],
+          queueIndex: prevQueueIndex,
+          shufflePosition: prevPos,
+          isPlaying: true
+        })
+      }
+    } else {
+      const { queueIndex } = get()
+      if (queueIndex > 0) {
+        const prevIndex = queueIndex - 1
+        set({
+          currentTrack: queue[prevIndex],
+          queueIndex: prevIndex,
+          isPlaying: true
+        })
+      }
     }
   },
 
@@ -331,7 +400,19 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
 
   toggleShuffle: () => {
-    set(state => ({ shuffle: !state.shuffle }))
+    const { shuffle, queue, queueIndex } = get()
+    if (!shuffle) {
+      // Turning ON — generate permutation with current track at position 0
+      if (queue.length > 0) {
+        const perm = buildShufflePermutation(queue.length, queueIndex, queue.map(t => t.id))
+        set({ shuffle: true, shuffledIndices: perm, shufflePosition: 0 })
+      } else {
+        set({ shuffle: true, shuffledIndices: [], shufflePosition: -1 })
+      }
+    } else {
+      // Turning OFF — clear permutation
+      set({ shuffle: false, shuffledIndices: [], shufflePosition: -1 })
+    }
   },
 
   cycleRepeat: () => {
@@ -396,6 +477,48 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
 
   setDriftNext: (fn) => set({ driftNext: fn }),
+
+  getUpcomingTrackIds: (count) => {
+    const { queue, queueIndex, shuffle, shuffledIndices, shufflePosition, driftNext } = get()
+    if (driftNext || queue.length === 0) return []
+
+    const ids: string[] = []
+    if (shuffle) {
+      for (let i = 1; i <= count && shufflePosition + i < shuffledIndices.length; i++) {
+        ids.push(queue[shuffledIndices[shufflePosition + i]].id)
+      }
+    } else {
+      for (let i = 1; i <= count && queueIndex + i < queue.length; i++) {
+        ids.push(queue[queueIndex + i].id)
+      }
+    }
+    return ids
+  },
+
+  togglePin: async (trackId) => {
+    const track = get().tracks.find(t => t.id === trackId) ||
+                  get().queue.find(t => t.id === trackId)
+    const isPinned = track?.pinned === 1
+
+    if (isPinned) {
+      await window.api.unpinTrack(trackId)
+    } else {
+      await window.api.pinTrack(trackId)
+      // Trigger download if not already local
+      window.api.requestTrackDownload(trackId).catch(console.error)
+    }
+
+    const newPinned = isPinned ? 0 : 1
+    const updateTrack = (t: Track): Track =>
+      t.id === trackId ? { ...t, pinned: newPinned } : t
+    set(state => ({
+      tracks: state.tracks.map(updateTrack),
+      queue: state.queue.map(updateTrack),
+      currentTrack: state.currentTrack?.id === trackId
+        ? { ...state.currentTrack, pinned: newPinned }
+        : state.currentTrack,
+    }))
+  },
 
   recordFeedback: (trackId, eventType, eventValue, source) => {
     const weight = getAttentionWeight()

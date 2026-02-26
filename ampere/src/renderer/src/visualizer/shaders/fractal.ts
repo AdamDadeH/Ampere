@@ -3,6 +3,7 @@
  * fractal field. Inspired by Star Nest (Pablo Roman Andrioli / Kali).
  * The "magic formula": p = abs(p)/dot(p,p) - formuparam
  * Produces infinite self-similar structure with smooth continuous drift.
+ * @source https://www.shadertoy.com/view/XlfGRj
  */
 
 export const fragmentSource = `#version 300 es
@@ -21,14 +22,14 @@ uniform float uPhaseBass;
 uniform float uPhaseMid;
 uniform float uPhaseTreble;
 
-const int VOLSTEPS = 14;
-const int ITERATIONS = 11;
+const int VOLSTEPS = 10;
+const int ITERATIONS = 8;
 const float FORMUPARAM = 0.53;
-const float STEPSIZE = 0.13;
+const float STEPSIZE = 0.15;
 const float TILE = 0.85;
-const float BRIGHTNESS = 0.002;
-const float DIST_FADING = 0.7;
-const float SATURATION = 0.8;
+const float BRIGHTNESS = 0.0035;
+const float DIST_FADING = 0.73;
+const float SATURATION = 0.85;
 
 void main() {
   vec2 uv = vUV - 0.5;
@@ -61,21 +62,22 @@ void main() {
       pa = lenP;
     }
 
-    // Dark matter density
-    float dm = max(0.0, a2 - 2.3);
-    a2 = pow(a2, 2.5);
+    // Dark matter density — lower threshold for more visibility
+    float dm = max(0.0, a2 - 1.5);
+    a2 = pow(a2, 2.0);
 
-    // Color varies with depth
+    // Color varies with depth — use step index for variation
+    float sr = float(r);
     fade *= DIST_FADING;
-    v += vec3(dm * dm * 0.3, dm * dm * 0.1, dm) * a2 * BRIGHTNESS * fade;
+    v += vec3(sr * sr * 0.0001, sr * 0.002, 0.003) + vec3(dm * dm * 0.3, dm * dm * 0.1, dm) * a2 * BRIGHTNESS * fade;
   }
 
   // Saturation control
   v = mix(vec3(length(v)), v, SATURATION);
 
   // Audio: bass brightens, beat pulses
-  v *= 1.0 + uBass * 0.4;
-  v += uBeat * 0.12;
+  v *= 1.5 + uBass * 0.5;
+  v += uBeat * 0.15;
 
   fragColor = vec4(clamp(v, 0.0, 1.0), 1.0);
 }

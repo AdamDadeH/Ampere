@@ -71,7 +71,8 @@ export interface ElectronAPI {
   bulkSetUmapCoords(coords: { trackId: string; x: number; y: number; z: number }[]): Promise<void>
   getFeatureCount(): Promise<number>
   readAudioFile(filePath: string): Promise<ArrayBuffer>
-  // Cloud-first: downloads
+  // Cloud-first: downloads + prefetch
+  prefetchTracks(trackIds: string[]): Promise<Record<string, string>>
   requestTrackDownload(trackId: string): Promise<boolean>
   onDownloadComplete(callback: (trackId: string) => void): () => void
   onDownloadProgress(callback: (data: { trackId: string; progress: number }) => void): () => void
@@ -143,7 +144,8 @@ const api: ElectronAPI = {
   bulkSetUmapCoords: (coords) => ipcRenderer.invoke('bulk-set-umap-coords', coords),
   getFeatureCount: () => ipcRenderer.invoke('get-feature-count'),
   readAudioFile: (filePath) => ipcRenderer.invoke('read-audio-file', filePath),
-  // Cloud-first: downloads
+  // Cloud-first: downloads + prefetch
+  prefetchTracks: (trackIds) => ipcRenderer.invoke('prefetch-tracks', trackIds),
   requestTrackDownload: (trackId) => ipcRenderer.invoke('request-track-download', trackId),
   onDownloadComplete: (callback) => {
     const handler = (_event: unknown, trackId: string): void => callback(trackId)

@@ -3,16 +3,49 @@ import { useLibraryStore } from '../stores/library'
 import { audioSignalProcessor, type AudioSignal } from '../audio/signal-processor'
 import { createProgram, createFullscreenTriangle, createFBO, resizeFBO, deleteFBO, FULLSCREEN_VERT, type FBO } from './gl-utils'
 import { fragmentSource as plasmaFrag } from './shaders/plasma'
-import { fragmentSource as tunnelFrag } from './shaders/tunnel'
 import { fragmentSource as starfieldFrag } from './shaders/starfield'
 import { fragmentSource as fractalFrag } from './shaders/fractal'
 import { fragmentSource as oceanFrag } from './shaders/ocean'
 import { fragmentSource as cloudsFrag } from './shaders/clouds'
 import { fragmentSource as creationFrag } from './shaders/creation'
 import { fragmentSource as voronoiFrag } from './shaders/voronoi'
+import { fragmentSource as deadMallFrag } from './shaders/dead-mall'
+import { fragmentSource as deadOfficeFrag } from './shaders/dead-office'
+import { fragmentSource as thunderstormFrag } from './shaders/thunderstorm'
+import { fragmentSource as deepPoolFrag } from './shaders/deep-pool'
+import { fragmentSource as stormcloudsFrag } from './shaders/stormclouds'
+import { fragmentSource as terrainFrag } from './shaders/terrain'
+import { fragmentSource as auroraFrag } from './shaders/aurora'
+import { fragmentSource as solarFrag } from './shaders/solar'
+import { fragmentSource as mengerFrag } from './shaders/menger'
+import { fragmentSource as neonCityFrag } from './shaders/neon-city'
+import { fragmentSource as desertFrag } from './shaders/desert'
+import { fragmentSource as forestFrag } from './shaders/forest'
+import { fragmentSource as nebulaFrag } from './shaders/nebula'
+import { fragmentSource as crystalCaveFrag } from './shaders/crystal-cave'
+import { fragmentSource as bioluminescentFrag } from './shaders/bioluminescent'
+import { fragmentSource as warpFrag } from './shaders/warp'
+import { fragmentSource as glacierFrag } from './shaders/glacier'
+import { fragmentSource as sandstormFrag } from './shaders/sandstorm'
+import { fragmentSource as eventHorizonFrag } from './shaders/event-horizon'
+import { fragmentSource as fogPeaksFrag } from './shaders/fog-peaks'
+import { fragmentSource as frozenDunesFrag } from './shaders/frozen-dunes'
+import { fragmentSource as infiniteCorridorFrag } from './shaders/infinite-corridor'
+import { fragmentSource as neonRainFrag } from './shaders/neon-rain'
+import { fragmentSource as backroomsFrag } from './shaders/backrooms'
+import { fragmentSource as causticPoolFrag } from './shaders/caustic-pool'
+import { fragmentSource as electricNoiseFrag } from './shaders/electric-noise'
+import { fragmentSource as interiorLightFrag } from './shaders/interior-light'
+import { fragmentSource as deepStarsFrag } from './shaders/deep-stars'
+import { fragmentSource as hyperloopFrag } from './shaders/hyperloop'
+import { fragmentSource as infiniteArcsFrag } from './shaders/infinite-arcs'
+import { fragmentSource as backroomsDarkFrag } from './shaders/backrooms-dark'
+import { fragmentSource as electricStormFrag } from './shaders/electric-storm'
+import { fragmentSource as plasmaOrbFrag } from './shaders/plasma-orb'
+import { fragmentSource as organicCellsFrag } from './shaders/organic-cells'
 import { fragmentSource as crtFrag } from './shaders/crt'
 import { createScroller, drawScroller, setScrollerText, resizeScroller, type ScrollerState } from './overlays/scroller'
-import { createPresetState, updatePresets, type PresetState, type ShaderName, type FeedbackParams } from './presets'
+import { createPresetState, updatePresets, cyclePreset, switchCategory, currentPresetInfo, type PresetState, type ShaderName, type FeedbackParams } from './presets'
 
 interface ShaderProgram {
   program: WebGLProgram
@@ -139,13 +172,46 @@ export function DemosceneVisualizer(): React.JSX.Element {
     // Compile all shaders
     const shaders: Record<ShaderName, ShaderProgram> = {
       plasma: compileEffect(gl, plasmaFrag),
-      tunnel: compileEffect(gl, tunnelFrag),
       starfield: compileEffect(gl, starfieldFrag),
       fractal: compileEffect(gl, fractalFrag),
       ocean: compileEffect(gl, oceanFrag),
       clouds: compileEffect(gl, cloudsFrag),
       creation: compileEffect(gl, creationFrag),
       voronoi: compileEffect(gl, voronoiFrag),
+      deadMall: compileEffect(gl, deadMallFrag),
+      deadOffice: compileEffect(gl, deadOfficeFrag),
+      thunderstorm: compileEffect(gl, thunderstormFrag),
+      deepPool: compileEffect(gl, deepPoolFrag),
+      stormclouds: compileEffect(gl, stormcloudsFrag),
+      terrain: compileEffect(gl, terrainFrag),
+      aurora: compileEffect(gl, auroraFrag),
+      solar: compileEffect(gl, solarFrag),
+      menger: compileEffect(gl, mengerFrag),
+      neonCity: compileEffect(gl, neonCityFrag),
+      desert: compileEffect(gl, desertFrag),
+      forest: compileEffect(gl, forestFrag),
+      nebula: compileEffect(gl, nebulaFrag),
+      crystalCave: compileEffect(gl, crystalCaveFrag),
+      bioluminescent: compileEffect(gl, bioluminescentFrag),
+      warp: compileEffect(gl, warpFrag),
+      glacier: compileEffect(gl, glacierFrag),
+      sandstorm: compileEffect(gl, sandstormFrag),
+      eventHorizon: compileEffect(gl, eventHorizonFrag),
+      fogPeaks: compileEffect(gl, fogPeaksFrag),
+      frozenDunes: compileEffect(gl, frozenDunesFrag),
+      infiniteCorridor: compileEffect(gl, infiniteCorridorFrag),
+      neonRain: compileEffect(gl, neonRainFrag),
+      backrooms: compileEffect(gl, backroomsFrag),
+      causticPool: compileEffect(gl, causticPoolFrag),
+      electricNoise: compileEffect(gl, electricNoiseFrag),
+      interiorLight: compileEffect(gl, interiorLightFrag),
+      deepStars: compileEffect(gl, deepStarsFrag),
+      hyperloop: compileEffect(gl, hyperloopFrag),
+      infiniteArcs: compileEffect(gl, infiniteArcsFrag),
+      backroomsDark: compileEffect(gl, backroomsDarkFrag),
+      electricStorm: compileEffect(gl, electricStormFrag),
+      plasmaOrb: compileEffect(gl, plasmaOrbFrag),
+      organicCells: compileEffect(gl, organicCellsFrag),
     }
     const crt = compileEffect(gl, crtFrag)
     const crossfade = compileEffect(gl, CROSSFADE_FRAG)
@@ -203,6 +269,45 @@ export function DemosceneVisualizer(): React.JSX.Element {
 
     const observer = new ResizeObserver(resize)
     observer.observe(container)
+
+    // --- OSD (on-screen display) for preset name ---
+    const osd = document.createElement('div')
+    osd.style.cssText = 'position:absolute;top:16px;right:16px;color:rgba(255,255,255,0.85);font:600 14px/1 monospace;pointer-events:none;opacity:0;transition:opacity 0.3s;text-shadow:0 1px 4px rgba(0,0,0,0.8);z-index:10;text-align:right'
+    container.appendChild(osd)
+    let osdTimer = 0
+    const showOSD = (text: string): void => {
+      osd.textContent = text
+      osd.style.opacity = '1'
+      clearTimeout(osdTimer)
+      osdTimer = window.setTimeout(() => { osd.style.opacity = '0' }, 2000)
+    }
+
+    // Show initial preset on load
+    {
+      const info = currentPresetInfo(presets)
+      showOSD(`[${info.category}] ${info.position} ${info.name}`)
+    }
+
+    // --- Keyboard controls ---
+    // [ / ] = switch category (demoscene / liminal / seeds)
+    // , / . = cycle through ALL presets (prev / next)
+    const onKeyDown = (e: KeyboardEvent): void => {
+      const s = stateRef.current
+      if (!s) return
+
+      if (e.key === '[' || e.key === ']') {
+        const dir = e.key === ']' ? 1 : -1
+        switchCategory(s.presets, dir as 1 | -1)
+        const info = currentPresetInfo(s.presets)
+        showOSD(`[${info.category}] ${info.position} ${info.name}`)
+      } else if (e.key === ',' || e.key === '.') {
+        const dir = e.key === '.' ? 1 : -1
+        cyclePreset(s.presets, dir as 1 | -1)
+        const info = currentPresetInfo(s.presets)
+        showOSD(`[${info.category}] ${info.position} ${info.name}`)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
 
     // --- Render loop ---
     const frame = (): void => {
@@ -273,6 +378,8 @@ export function DemosceneVisualizer(): React.JSX.Element {
     return () => {
       cancelAnimationFrame(rafRef.current)
       observer.disconnect()
+      window.removeEventListener('keydown', onKeyDown)
+      clearTimeout(osdTimer)
 
       const s = stateRef.current
       if (s && gl) {

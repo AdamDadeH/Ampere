@@ -192,6 +192,18 @@ export function AudioEngine(): React.JSX.Element {
     })
   }, [currentTrackId, setCurrentTime, setDuration, initAudioChain, broadcastNow])
 
+  // Prefetch upcoming tracks after current track starts loading
+  useEffect(() => {
+    if (!currentTrackId) return
+    const timer = setTimeout(() => {
+      const ids = useLibraryStore.getState().getUpcomingTrackIds(3)
+      if (ids.length > 0) {
+        window.api.prefetchTracks(ids).catch(console.error)
+      }
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [currentTrackId])
+
   // Play/pause sync + pause-abandon tracking
   useEffect(() => {
     const audio = audioRef.current
@@ -252,7 +264,7 @@ export function AudioEngine(): React.JSX.Element {
   }, [setDuration])
 
   const handleEnded = useCallback(() => {
-    const { repeatMode, shuffle, queue, queueIndex } = useLibraryStore.getState()
+    const { repeatMode } = useLibraryStore.getState()
 
     if (repeatMode === 'one') {
       const audio = audioRef.current
@@ -263,22 +275,8 @@ export function AudioEngine(): React.JSX.Element {
       return
     }
 
-    if (shuffle) {
-      nextTrack('auto_advance')
-      return
-    }
-
-    if (queueIndex < queue.length - 1) {
-      nextTrack('auto_advance')
-    } else if (repeatMode === 'all' && queue.length > 0) {
-      useLibraryStore.setState({
-        currentTrack: queue[0],
-        queueIndex: 0,
-        isPlaying: true
-      })
-    } else {
-      useLibraryStore.setState({ isPlaying: false })
-    }
+    // nextTrack handles shuffle, sequential, and repeat-all wrap
+    nextTrack('auto_advance')
   }, [nextTrack])
 
   // Broadcast player state to compact window at 4Hz
