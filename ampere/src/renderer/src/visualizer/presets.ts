@@ -2,9 +2,9 @@
  * Preset system — shader selection, feedback parameters, auto-cycling, crossfade transitions.
  */
 
-export type ShaderName = 'plasma' | 'starfield' | 'fractal' | 'ocean' | 'clouds' | 'creation' | 'voronoi' | 'deadMall' | 'deadOffice' | 'thunderstorm' | 'deepPool' | 'stormclouds' | 'terrain' | 'aurora' | 'solar' | 'menger' | 'neonCity' | 'desert' | 'forest' | 'nebula' | 'crystalCave' | 'bioluminescent' | 'warp' | 'glacier' | 'sandstorm' | 'eventHorizon' | 'fogPeaks' | 'frozenDunes' | 'infiniteCorridor' | 'neonRain' | 'backrooms' | 'causticPool' | 'electricNoise' | 'interiorLight' | 'deepStars' | 'hyperloop' | 'infiniteArcs' | 'backroomsDark' | 'electricStorm' | 'plasmaOrb' | 'organicCells'
+export type ShaderName = 'plasma' | 'starfield' | 'ocean' | 'creation' | 'voronoi' | 'deadMall' | 'deadOffice' | 'thunderstorm' | 'deepPool' | 'terrain' | 'aurora' | 'solar' | 'desert' | 'forest' | 'nebula' | 'crystalCave' | 'bioluminescent' | 'warp' | 'glacier' | 'sandstorm' | 'eventHorizon' | 'fogPeaks' | 'frozenDunes' | 'infiniteCorridor' | 'neonRain' | 'backrooms' | 'causticPool' | 'electricNoise' | 'interiorLight' | 'deepStars' | 'hyperloop' | 'infiniteArcs' | 'electricStorm' | 'plasmaOrb' | 'organicCells' | 'nightDrive' | 'heartfelt' | 'waveGrid' | 'sineField' | 'clockwork' | 'particleGlow' | 'dotGrid' | 'chromeBlobs' | 'latticeTunnel' | 'linescape' | 'glassTowers' | 'fractalVoxel' | 'tokyoRain' | 'kaliIsland' | 'kaliVoyage' | 'parametricCurves' | 'topologica' | 'waveInterference' | 'beatCircles' | 'retroTerrain' | 'topologicaBlue' | 'dataGates' | 'diamondTerrain'
 
-export type PresetCategory = 'demoscene' | 'liminal' | 'seeds'
+export type PresetCategory = 'demoscene' | 'seeds'
 
 export interface FeedbackParams {
   decay: number     // 0–1, how much of previous frame to retain
@@ -34,22 +34,10 @@ export const PRESETS: Preset[] = [
     feedback: { decay: 0.65, zoom: 1.006, rotation: 0.0 },
   },
   {
-    shader: 'fractal',
-    name: 'Kali Fractal',
-    category: 'demoscene',
-    feedback: { decay: 0.80, zoom: 1.003, rotation: 0.08 },
-  },
-  {
     shader: 'ocean',
     name: 'Deep Ocean',
     category: 'demoscene',
     feedback: { decay: 0.70, zoom: 1.002, rotation: 0.0 },
-  },
-  {
-    shader: 'clouds',
-    name: 'Nebula Drift',
-    category: 'demoscene',
-    feedback: { decay: 0.85, zoom: 1.003, rotation: 0.05 },
   },
   {
     shader: 'creation',
@@ -65,15 +53,9 @@ export const PRESETS: Preset[] = [
   },
   // --- Liminal (stable, good enough to show) ---
   {
-    shader: 'stormclouds',
-    name: 'Stormclouds',
-    category: 'liminal',
-    feedback: { decay: 0.45, zoom: 1.001, rotation: 0.0 },
-  },
-  {
     shader: 'terrain',
     name: 'Mountain Flyover',
-    category: 'liminal',
+    category: 'seeds',
     feedback: { decay: 0.50, zoom: 1.002, rotation: 0.0 },
   },
   {
@@ -87,18 +69,6 @@ export const PRESETS: Preset[] = [
     name: 'Solar Surface',
     category: 'seeds',
     feedback: { decay: 0.50, zoom: 1.002, rotation: 0.02 },
-  },
-  {
-    shader: 'menger',
-    name: 'Menger Halls',
-    category: 'seeds',
-    feedback: { decay: 0.65, zoom: 1.003, rotation: 0.0 },
-  },
-{
-    shader: 'neonCity',
-    name: 'Neon City',
-    category: 'seeds',
-    feedback: { decay: 0.55, zoom: 1.002, rotation: 0.0 },
   },
   {
     shader: 'desert',
@@ -195,7 +165,7 @@ export const PRESETS: Preset[] = [
   {
     shader: 'electricNoise',
     name: 'Electric Noise',
-    category: 'seeds',
+    category: 'demoscene',
     feedback: { decay: 0.80, zoom: 1.004, rotation: 0.1 },
   },
   {
@@ -224,12 +194,6 @@ export const PRESETS: Preset[] = [
   },
   // --- Gen6: perturbation / mutation / fusion ---
   {
-    shader: 'backroomsDark',
-    name: 'Backrooms Dark',
-    category: 'seeds',
-    feedback: { decay: 0.55, zoom: 1.001, rotation: 0.0 },
-  },
-  {
     shader: 'electricStorm',
     name: 'Electric Storm',
     category: 'seeds',
@@ -238,7 +202,7 @@ export const PRESETS: Preset[] = [
   {
     shader: 'plasmaOrb',
     name: 'Plasma Orb',
-    category: 'seeds',
+    category: 'demoscene',
     feedback: { decay: 0.70, zoom: 1.003, rotation: 0.06 },
   },
   {
@@ -246,6 +210,145 @@ export const PRESETS: Preset[] = [
     name: 'Organic Cells',
     category: 'seeds',
     feedback: { decay: 0.65, zoom: 1.002, rotation: 0.0 },
+  },
+  {
+    shader: 'nightDrive',
+    name: 'Night Drive',
+    category: 'seeds',
+    feedback: { decay: 0.55, zoom: 1.001, rotation: 0.0 },
+  },
+  {
+    shader: 'heartfelt',
+    name: 'Heartfelt',
+    category: 'seeds',
+    feedback: { decay: 0.60, zoom: 1.002, rotation: 0.0 },
+  },
+  {
+    shader: 'waveGrid',
+    name: 'Wave Grid',
+    category: 'seeds',
+    feedback: { decay: 0.75, zoom: 1.003, rotation: 0.04 },
+  },
+  {
+    shader: 'sineField',
+    name: 'Sine Field',
+    category: 'seeds',
+    feedback: { decay: 0.70, zoom: 1.003, rotation: 0.03 },
+  },
+  {
+    shader: 'clockwork',
+    name: 'Clockwork',
+    category: 'seeds',
+    feedback: { decay: 0.50, zoom: 1.001, rotation: 0.0 },
+  },
+  {
+    shader: 'particleGlow',
+    name: 'Particle Glow',
+    category: 'seeds',
+    feedback: { decay: 0.72, zoom: 1.004, rotation: 0.05 },
+  },
+  {
+    shader: 'dotGrid',
+    name: 'Dot Grid',
+    category: 'seeds',
+    feedback: { decay: 0.65, zoom: 1.002, rotation: 0.02 },
+  },
+  {
+    shader: 'chromeBlobs',
+    name: 'Chrome Blobs',
+    category: 'seeds',
+    feedback: { decay: 0.60, zoom: 1.003, rotation: 0.04 },
+  },
+  {
+    shader: 'latticeTunnel',
+    name: 'Lattice Tunnel',
+    category: 'seeds',
+    feedback: { decay: 0.55, zoom: 1.004, rotation: 0.0 },
+  },
+  {
+    shader: 'linescape',
+    name: 'Linescape',
+    category: 'seeds',
+    feedback: { decay: 0.45, zoom: 1.001, rotation: 0.0 },
+  },
+  // --- Gen7: batch import from shaders-to-add ---
+  {
+    shader: 'glassTowers',
+    name: 'Glass Towers',
+    category: 'seeds',
+    feedback: { decay: 0.65, zoom: 1.003, rotation: 0.02 },
+  },
+  {
+    shader: 'fractalVoxel',
+    name: 'Fractal Voxel',
+    category: 'seeds',
+    feedback: { decay: 0.70, zoom: 1.004, rotation: 0.05 },
+  },
+  {
+    shader: 'tokyoRain',
+    name: 'Tokyo Rain',
+    category: 'seeds',
+    feedback: { decay: 0.55, zoom: 1.001, rotation: 0.0 },
+  },
+  {
+    shader: 'kaliIsland',
+    name: 'Kali Island',
+    category: 'seeds',
+    feedback: { decay: 0.60, zoom: 1.002, rotation: 0.03 },
+  },
+  {
+    shader: 'kaliVoyage',
+    name: 'Kali Voyage',
+    category: 'seeds',
+    feedback: { decay: 0.65, zoom: 1.003, rotation: 0.04 },
+  },
+  {
+    shader: 'parametricCurves',
+    name: 'Parametric Curves',
+    category: 'seeds',
+    feedback: { decay: 0.75, zoom: 1.004, rotation: 0.06 },
+  },
+  {
+    shader: 'topologica',
+    name: 'Topologica Red',
+    category: 'seeds',
+    feedback: { decay: 0.70, zoom: 1.003, rotation: 0.03 },
+  },
+  {
+    shader: 'waveInterference',
+    name: 'Wave Interference',
+    category: 'seeds',
+    feedback: { decay: 0.80, zoom: 1.004, rotation: 0.08 },
+  },
+  {
+    shader: 'beatCircles',
+    name: 'Beat Circles',
+    category: 'seeds',
+    feedback: { decay: 0.72, zoom: 1.003, rotation: 0.05 },
+  },
+  {
+    shader: 'retroTerrain',
+    name: 'Retro Terrain',
+    category: 'seeds',
+    feedback: { decay: 0.50, zoom: 1.002, rotation: 0.0 },
+  },
+  {
+    shader: 'topologicaBlue',
+    name: 'Topologica Blue',
+    category: 'seeds',
+    feedback: { decay: 0.65, zoom: 1.003, rotation: 0.02 },
+  },
+  {
+    shader: 'dataGates',
+    name: 'Data Gates',
+    category: 'seeds',
+    feedback: { decay: 0.60, zoom: 1.002, rotation: 0.0 },
+  },
+  {
+    shader: 'diamondTerrain',
+    name: 'Diamond Terrain',
+    category: 'seeds',
+    feedback: { decay: 0.45, zoom: 1.001, rotation: 0.0 },
   },
 ]
 
@@ -320,7 +423,7 @@ export function cyclePreset(state: PresetState, direction: 1 | -1): string {
 /** Switch to the first preset in a different category */
 export function switchCategory(state: PresetState, direction: 1 | -1): string {
   snapTransition(state)
-  const categories: PresetCategory[] = ['demoscene', 'liminal', 'seeds']
+  const categories: PresetCategory[] = ['demoscene', 'seeds']
   const currentCategory = PRESETS[state.currentIndex].category
   const currentCatIdx = categories.indexOf(currentCategory)
   const nextCatIdx = (currentCatIdx + direction + categories.length) % categories.length

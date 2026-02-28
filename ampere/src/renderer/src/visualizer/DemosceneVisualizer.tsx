@@ -4,21 +4,16 @@ import { audioSignalProcessor, type AudioSignal } from '../audio/signal-processo
 import { createProgram, createFullscreenTriangle, createFBO, resizeFBO, deleteFBO, FULLSCREEN_VERT, type FBO } from './gl-utils'
 import { fragmentSource as plasmaFrag } from './shaders/plasma'
 import { fragmentSource as starfieldFrag } from './shaders/starfield'
-import { fragmentSource as fractalFrag } from './shaders/fractal'
 import { fragmentSource as oceanFrag } from './shaders/ocean'
-import { fragmentSource as cloudsFrag } from './shaders/clouds'
 import { fragmentSource as creationFrag } from './shaders/creation'
 import { fragmentSource as voronoiFrag } from './shaders/voronoi'
 import { fragmentSource as deadMallFrag } from './shaders/dead-mall'
 import { fragmentSource as deadOfficeFrag } from './shaders/dead-office'
 import { fragmentSource as thunderstormFrag } from './shaders/thunderstorm'
 import { fragmentSource as deepPoolFrag } from './shaders/deep-pool'
-import { fragmentSource as stormcloudsFrag } from './shaders/stormclouds'
 import { fragmentSource as terrainFrag } from './shaders/terrain'
 import { fragmentSource as auroraFrag } from './shaders/aurora'
 import { fragmentSource as solarFrag } from './shaders/solar'
-import { fragmentSource as mengerFrag } from './shaders/menger'
-import { fragmentSource as neonCityFrag } from './shaders/neon-city'
 import { fragmentSource as desertFrag } from './shaders/desert'
 import { fragmentSource as forestFrag } from './shaders/forest'
 import { fragmentSource as nebulaFrag } from './shaders/nebula'
@@ -39,10 +34,32 @@ import { fragmentSource as interiorLightFrag } from './shaders/interior-light'
 import { fragmentSource as deepStarsFrag } from './shaders/deep-stars'
 import { fragmentSource as hyperloopFrag } from './shaders/hyperloop'
 import { fragmentSource as infiniteArcsFrag } from './shaders/infinite-arcs'
-import { fragmentSource as backroomsDarkFrag } from './shaders/backrooms-dark'
 import { fragmentSource as electricStormFrag } from './shaders/electric-storm'
 import { fragmentSource as plasmaOrbFrag } from './shaders/plasma-orb'
 import { fragmentSource as organicCellsFrag } from './shaders/organic-cells'
+import { fragmentSource as nightDriveFrag } from './shaders/night-drive'
+import { fragmentSource as heartfeltFrag } from './shaders/heartfelt'
+import { fragmentSource as waveGridFrag } from './shaders/wave-grid'
+import { fragmentSource as sineFieldFrag } from './shaders/sine-field'
+import { fragmentSource as clockworkFrag } from './shaders/clockwork'
+import { fragmentSource as particleGlowFrag } from './shaders/particle-glow'
+import { fragmentSource as dotGridFrag } from './shaders/dot-grid'
+import { fragmentSource as chromeBlobsFrag } from './shaders/chrome-blobs'
+import { fragmentSource as latticeTunnelFrag } from './shaders/lattice-tunnel'
+import { fragmentSource as linescapeFrag } from './shaders/linescape'
+import { fragmentSource as glassTowersFrag } from './shaders/glass-towers'
+import { fragmentSource as fractalVoxelFrag } from './shaders/fractal-voxel'
+import { fragmentSource as tokyoRainFrag } from './shaders/tokyo-rain'
+import { fragmentSource as kaliIslandFrag } from './shaders/kali-island'
+import { fragmentSource as kaliVoyageFrag } from './shaders/kali-voyage'
+import { fragmentSource as parametricCurvesFrag } from './shaders/parametric-curves'
+import { fragmentSource as topologicaFrag } from './shaders/topologica'
+import { fragmentSource as waveInterferenceFrag } from './shaders/wave-interference'
+import { fragmentSource as beatCirclesFrag } from './shaders/beat-circles'
+import { fragmentSource as retroTerrainFrag } from './shaders/retro-terrain'
+import { fragmentSource as topologicaBlueFrag } from './shaders/topologica-blue'
+import { fragmentSource as dataGatesFrag } from './shaders/data-gates'
+import { fragmentSource as diamondTerrainFrag } from './shaders/diamond-terrain'
 import { fragmentSource as crtFrag } from './shaders/crt'
 import { createScroller, drawScroller, setScrollerText, resizeScroller, type ScrollerState } from './overlays/scroller'
 import { createPresetState, updatePresets, cyclePreset, switchCategory, currentPresetInfo, type PresetState, type ShaderName, type FeedbackParams } from './presets'
@@ -173,21 +190,16 @@ export function DemosceneVisualizer(): React.JSX.Element {
     const shaders: Record<ShaderName, ShaderProgram> = {
       plasma: compileEffect(gl, plasmaFrag),
       starfield: compileEffect(gl, starfieldFrag),
-      fractal: compileEffect(gl, fractalFrag),
       ocean: compileEffect(gl, oceanFrag),
-      clouds: compileEffect(gl, cloudsFrag),
       creation: compileEffect(gl, creationFrag),
       voronoi: compileEffect(gl, voronoiFrag),
       deadMall: compileEffect(gl, deadMallFrag),
       deadOffice: compileEffect(gl, deadOfficeFrag),
       thunderstorm: compileEffect(gl, thunderstormFrag),
       deepPool: compileEffect(gl, deepPoolFrag),
-      stormclouds: compileEffect(gl, stormcloudsFrag),
       terrain: compileEffect(gl, terrainFrag),
       aurora: compileEffect(gl, auroraFrag),
       solar: compileEffect(gl, solarFrag),
-      menger: compileEffect(gl, mengerFrag),
-      neonCity: compileEffect(gl, neonCityFrag),
       desert: compileEffect(gl, desertFrag),
       forest: compileEffect(gl, forestFrag),
       nebula: compileEffect(gl, nebulaFrag),
@@ -208,10 +220,32 @@ export function DemosceneVisualizer(): React.JSX.Element {
       deepStars: compileEffect(gl, deepStarsFrag),
       hyperloop: compileEffect(gl, hyperloopFrag),
       infiniteArcs: compileEffect(gl, infiniteArcsFrag),
-      backroomsDark: compileEffect(gl, backroomsDarkFrag),
       electricStorm: compileEffect(gl, electricStormFrag),
       plasmaOrb: compileEffect(gl, plasmaOrbFrag),
       organicCells: compileEffect(gl, organicCellsFrag),
+      nightDrive: compileEffect(gl, nightDriveFrag),
+      heartfelt: compileEffect(gl, heartfeltFrag),
+      waveGrid: compileEffect(gl, waveGridFrag),
+      sineField: compileEffect(gl, sineFieldFrag),
+      clockwork: compileEffect(gl, clockworkFrag),
+      particleGlow: compileEffect(gl, particleGlowFrag),
+      dotGrid: compileEffect(gl, dotGridFrag),
+      chromeBlobs: compileEffect(gl, chromeBlobsFrag),
+      latticeTunnel: compileEffect(gl, latticeTunnelFrag),
+      linescape: compileEffect(gl, linescapeFrag),
+      glassTowers: compileEffect(gl, glassTowersFrag),
+      fractalVoxel: compileEffect(gl, fractalVoxelFrag),
+      tokyoRain: compileEffect(gl, tokyoRainFrag),
+      kaliIsland: compileEffect(gl, kaliIslandFrag),
+      kaliVoyage: compileEffect(gl, kaliVoyageFrag),
+      parametricCurves: compileEffect(gl, parametricCurvesFrag),
+      topologica: compileEffect(gl, topologicaFrag),
+      waveInterference: compileEffect(gl, waveInterferenceFrag),
+      beatCircles: compileEffect(gl, beatCirclesFrag),
+      retroTerrain: compileEffect(gl, retroTerrainFrag),
+      topologicaBlue: compileEffect(gl, topologicaBlueFrag),
+      dataGates: compileEffect(gl, dataGatesFrag),
+      diamondTerrain: compileEffect(gl, diamondTerrainFrag),
     }
     const crt = compileEffect(gl, crtFrag)
     const crossfade = compileEffect(gl, CROSSFADE_FRAG)
