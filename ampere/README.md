@@ -5,12 +5,22 @@ A desktop music player built with Electron, React, and SQLite. Features a librar
 ## Getting Started
 
 ```bash
-npm install
-npm run dev      # development with hot reload
-npm run build    # production build
+npm install                # from the monorepo root
+npm run rebuild            # rebuild better-sqlite3 against current Electron headers
+npm run dev                # development with hot reload
+npm run build              # production renderer/main bundle (no app packaging)
+npm run dist               # produce dist/mac-arm64/Ampere.app — drag to /Applications
+npm run dist:dmg           # like dist, but as a .dmg installer
 ```
 
-Requires Node.js 20+.
+Requires Node.js 18+ and Xcode CLT (for the native SQLite module).
+
+First launch of the packaged app: **right-click → Open** because the build
+is unsigned.
+
+User data lives at `~/Library/Application Support/ampere/library.db` —
+shared between dev mode and the packaged app. See
+[`CLAUDE.md`](CLAUDE.md#where-user-data-lives) for the why.
 
 ## Usage
 
@@ -111,6 +121,46 @@ src/
         ...
 ```
 
+### Library, Scanner, and Audio Server
+
+**`LibraryDatabase` (`src/main/database/index.ts`)** is the only owner of
+the SQLite connection. All queries are encapsulated as methods on this
+class. Schema lives in `schema.ts` as one constant `SCHEMA_SQL` plus a
+`SCHEMA_VERSION` integer; junction tables (`track_artists`,
+`track_album_artists`) are rebuilt from source columns whenever the version
+bumps.
+
+Tables:
+
+| Table | Role | Derived? |
+|-------|------|----------|
+| `tracks` | source of truth — file path, tags, play count, rating, sync status | No |
+| `playlists` / `playlist_tracks` | user playlists | No |
+| `storage_sources` | registered local + Proton Drive roots | No |
+| `track_feedback` | per-event user signals (skips, completes, seeks) | No |
+| `track_artists` / `track_album_artists` | searchable artist indexes | **Yes** — rebuilt from `tracks.artist` / `tracks.album_artist` |
+| `track_features` | 56-dim audio vector + UMAP coordinates | **Yes** — recomputable from audio files |
+| `sync_queue` | pending Proton Drive operations | No |
+
+**`FolderScanner` (`src/main/scanner/index.ts`)** walks a directory via
+`StorageProvider`, extracts metadata via `MusicMetadataExtractor`, and
+upserts into the DB. It dedupes first by `embedded_id` (the music tag's
+unique ID) then by file path. Progress events stream to the renderer via
+IPC.
+
+**Audio HTTP server (`src/main/index.ts`)** is a loopback-only HTTP server
+on a random port, started during app boot. It serves files from the
+filesystem with HTTP range request support so `<audio>` can seek FLACs
+correctly, and intercepts Proton Drive paths to trigger on-demand
+materialization before serving. Renderer code references tracks via
+`http://127.0.0.1:<port>/<encoded-path>` rather than `file://`.
+
+**Storage providers (`src/main/storage/`)** abstract the source. Today:
+`LocalStorageProvider` for filesystem, plus Proton Drive helpers
+(`proton-drive.ts`) that detect mounted Proton Drive folders, check
+materialization status, and request downloads. `CacheManager` enforces an
+LRU cap on materialized cloud files.
+
 ### Key Design Decisions
 
 **Inline styles from skin objects, not CSS variables.** The compact player receives a `CompactSkin` object and every component applies styles directly. This means zero coupling between the compact player and CSS — a skin fully describes its appearance.
@@ -175,6 +225,74 @@ Compact ↔ Library (cross-window):
 ```
 
 Cross-window sync: when one window writes to `localStorage`, the other receives a `storage` event and updates its zustand state to match.
+
+---
+
+## Riemann Navigator — Developer Guide
+
+A 3D library map where tracks are positioned by **what they sound like**,
+not by metadata. Implemented in `src/renderer/src/riemann/`.
+
+**Hard rule: positioning is derived from audio signal only.** If you find
+yourself reaching for genre, artist, or year to influence layout, stop —
+that belongs to a different view.
+
+### Pipeline
+
+```
+audio file (via main process IPC)
+   │
+   ▼
+Meyda  (extract-features.ts)
+   │   spectral centroid, rolloff, flatness, MFCC[0..12], RMS,
+   │   chroma[0..11], zero-crossing rate, ... → 56-dim vector
+   ▼
+track_features.features_json           (per-track, persisted)
+   │
+   ▼
+UMAP   (umap-projection.ts)            n × 56 → n × 3
+   │   configurable: dim (2D/3D), nNeighbors, minDist, spread
+   ▼
+track_features.umap_x/y/z              (persisted, recomputable)
+   │
+   ▼
+Three.js scene  (RiemannNavigator.tsx)
+   │   • point cloud (one sphere per track)
+   │   • bloom post-processing
+   │   • fly controls + raycaster (click to play)
+   │   • drift mode toggle (overrides nextTrack)
+```
+
+### Files
+
+| File | Role |
+|------|------|
+| `extract-features.ts` | Meyda wrapper. Decodes audio in renderer, returns 56-dim Float32Array. |
+| `feature-worker.ts` | Iterates tracks-without-features, calls extractor, persists, emits progress. Supports abort. |
+| `umap-projection.ts` | Wraps `umap-js`. Pure function: vectors in, coordinates out. |
+| `navigation.ts` | KNN graph from feature vectors; drift state machine; foundation for future modes (e.g., "follow tonal neighbors"). |
+| `RiemannNavigator.tsx` | The Three.js scene, settings UI, layout controls, drift toggle. |
+| `*.test.ts` | Vitest specs for projection and navigation logic. |
+
+### Adding a navigation mode
+
+Modes register a `driftNext` callback on the library store that overrides
+`nextTrack()`. The store doesn't know which mode is active — it just calls
+the callback if set. To add a mode:
+
+1. Implement a `next(trackId, graph): trackId` selector in
+   `navigation.ts` (or a new file).
+2. In `RiemannNavigator.tsx`, expose a UI control that wires the selector
+   to the store's `setDriftNext()` setter when active, and clears it on
+   deactivate.
+3. Tests go in `navigation.test.ts`.
+
+### Re-projection
+
+UMAP is non-deterministic across runs. Coordinates persist to
+`track_features.umap_x/y/z` but they're derived — recomputing is cheap and
+expected when feature dimensionality, distance metric, or major UMAP
+params change. Treat coordinates as a cache, never as user data.
 
 ---
 

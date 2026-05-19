@@ -3,6 +3,10 @@ import { join, extname } from 'path'
 import { pathToFileURL } from 'url'
 import { createReadStream, readFileSync, statSync } from 'fs'
 import { createServer, Server } from 'http'
+
+// Lock userData to lowercase 'ampere' so the packaged app (productName "Ampere")
+// shares one library.db with `npm run dev`. Must run before any code reads userData.
+app.setPath('userData', join(app.getPath('appData'), 'ampere'))
 import { LibraryDatabase } from './database'
 import { LocalStorageProvider } from './storage/local-provider'
 import { AUDIO_EXTENSIONS } from './storage/provider'
