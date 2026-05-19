@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a0b2e"/>
+      <stop offset="55%" stop-color="#3a0e5e"/>
+      <stop offset="100%" stop-color="#0a0420"/>
+    </linearGradient>
+    <radialGradient id="orb" cx="0.5" cy="0.45" r="0.55">
+      <stop offset="0%"  stop-color="#fef9ff" stop-opacity="1"/>
+      <stop offset="35%" stop-color="#f0a8ff" stop-opacity="0.95"/>
+      <stop offset="70%" stop-color="#a855f7" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#5b21b6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wave" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%"   stop-color="#67e8f9" stop-opacity="0"/>
+      <stop offset="20%"  stop-color="#67e8f9" stop-opacity="1"/>
+      <stop offset="50%"  stop-color="#f0abfc" stop-opacity="1"/>
+      <stop offset="80%"  stop-color="#67e8f9" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#67e8f9" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+    <filter id="softglow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="40"/>
+    </filter>
+    <clipPath id="squircle">
+      <path d="M 512 32
+               C 760 32, 992 264, 992 512
+               C 992 760, 760 992, 512 992
+               C 264 992, 32 760, 32 512
+               C 32 264, 264 32, 512 32 Z"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <rect width="1024" height="1024" fill="url(#bg)"/>
+
+    <!-- Diffuse glow halo behind orb -->
+    <circle cx="512" cy="470" r="320" fill="#a855f7" opacity="0.35" filter="url(#softglow)"/>
+
+    <!-- Concentric rings (Riemann sphere lattice hint) -->
+    <g stroke="#c4b5fd" stroke-opacity="0.18" fill="none" stroke-width="2">
+      <ellipse cx="512" cy="500" rx="340" ry="120"/>
+      <ellipse cx="512" cy="500" rx="270" ry="95"/>
+      <ellipse cx="512" cy="500" rx="200" ry="70"/>
+    </g>
+    <g stroke="#67e8f9" stroke-opacity="0.22" fill="none" stroke-width="2">
+      <ellipse cx="512" cy="500" rx="340" ry="120" transform="rotate(60 512 500)"/>
+      <ellipse cx="512" cy="500" rx="340" ry="120" transform="rotate(-60 512 500)"/>
+    </g>
+
+    <!-- Central orb -->
+    <circle cx="512" cy="460" r="240" fill="url(#orb)"/>
+
+    <!-- Specular highlight -->
+    <ellipse cx="430" cy="370" rx="90" ry="50" fill="#ffffff" opacity="0.55" filter="url(#glow)"/>
+
+    <!-- Waveform across the lower band -->
+    <g filter="url(#glow)" opacity="0.9">
+      <path d="M 60 740
+               Q 140 700, 200 740
+               T 320 740
+               Q 380 660, 440 740
+               Q 500 820, 560 740
+               Q 620 620, 680 740
+               T 800 740
+               Q 860 700, 964 740"
+            stroke="url(#wave)" stroke-width="14" fill="none" stroke-linecap="round"/>
+    </g>
+    <path d="M 60 740
+             Q 140 700, 200 740
+             T 320 740
+             Q 380 660, 440 740
+             Q 500 820, 560 740
+             Q 620 620, 680 740
+             T 800 740
+             Q 860 700, 964 740"
+          stroke="url(#wave)" stroke-width="6" fill="none" stroke-linecap="round"/>
+
+    <!-- Inner squircle stroke for crispness -->
+    <path d="M 512 32
+             C 760 32, 992 264, 992 512
+             C 992 760, 760 992, 512 992
+             C 264 992, 32 760, 32 512
+             C 32 264, 264 32, 512 32 Z"
+          fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
+  </g>
+</svg>
