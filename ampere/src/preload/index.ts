@@ -63,6 +63,7 @@ export interface ElectronAPI {
   onPlayerCommand(callback: (command: string, ...args: unknown[]) => void): () => void
   sendPlayerState(state: PlayerState): void
   onPlayerStateUpdate(callback: (state: PlayerState) => void): () => void
+  onCompactPresence(callback: (open: boolean) => void): () => void
   // Riemann navigator
   getTracksWithoutFeatures(): Promise<{ id: string; file_path: string }[]>
   upsertTrackFeatures(trackId: string, featuresJson: string): Promise<void>
@@ -82,7 +83,7 @@ export interface ElectronAPI {
   addStorageSource(source: { id: string; type: string; root_path: string; label?: string; proton_email?: string }): Promise<void>
   removeStorageSource(sourceId: string): Promise<void>
   // Cloud-first: cache management
-  getCacheStats(): Promise<{ totalTracks: number; cachedTracks: number; cloudOnlyTracks: number; pinnedTracks: number; cachedBytes: number; pinnedBytes: number }>
+  getCacheStats(): Promise<{ totalTracks: number; cachedTracks: number; cloudOnlyTracks: number; pinnedTracks: number; cachedBytes: number; pinnedBytes: number; maxSizeBytes: number }>
   setCacheLimit(bytes: number): Promise<void>
   pinTrack(trackId: string): Promise<void>
   unpinTrack(trackId: string): Promise<void>
@@ -135,6 +136,11 @@ const api: ElectronAPI = {
     const handler = (_event: unknown, state: PlayerState): void => callback(state)
     ipcRenderer.on('player-state-update', handler)
     return () => ipcRenderer.removeListener('player-state-update', handler)
+  },
+  onCompactPresence: (callback) => {
+    const handler = (_event: unknown, open: boolean): void => callback(open)
+    ipcRenderer.on('compact-presence', handler)
+    return () => ipcRenderer.removeListener('compact-presence', handler)
   },
   // Riemann navigator
   getTracksWithoutFeatures: () => ipcRenderer.invoke('get-tracks-without-features'),

@@ -167,6 +167,15 @@ function touchFileByPath(filePath: string): void {
   }
 }
 
+/** Tell the library window whether the compact window is open, so it can
+ *  gate the 4Hz player-state broadcast (the compact window is its only
+ *  consumer). */
+function notifyCompactPresence(open: boolean): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('compact-presence', open)
+  }
+}
+
 /** Notify renderer that a download completed */
 function notifyDownloadComplete(trackId: string): void {
   const windows = [mainWindow, compactWindow]
@@ -258,11 +267,16 @@ function createCompactWindow(): void {
 
   compactWindow.on('closed', () => {
     compactWindow = null
+    notifyCompactPresence(false)
     // Show library window when compact is closed
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.show()
     }
   })
+
+  // Once the compact window has loaded and subscribed, tell the library window
+  // to start broadcasting (and push an immediate first frame).
+  compactWindow.webContents.once('did-finish-load', () => notifyCompactPresence(true))
 }
 
 function setupIPC(): void {
@@ -458,11 +472,13 @@ function setupIPC(): void {
     db.removeStorageSource(sourceId)
   })
 
-  // Cloud-first: cache management
-  ipcMain.handle('get-cache-stats', () => db.getCacheStats())
+  // Cloud-first: cache management. getStats() merges the live maxSizeBytes
+  // from the cache manager onto the DB-derived counts.
+  ipcMain.handle('get-cache-stats', () => cacheManager.getStats())
 
   ipcMain.handle('set-cache-limit', (_event, bytes: number) => {
     cacheManager.setMaxSize(bytes)
+    db.setCacheLimitBytes(bytes)
   })
 
   ipcMain.handle('pin-track', (_event, trackId: string) => {
@@ -567,8 +583,10 @@ app.whenReady().then(async () => {
     }
   }
 
-  // Initialize cache manager and run initial eviction pass
-  cacheManager = new CacheManager(db)
+  // Initialize cache manager and run initial eviction pass.
+  // Honor a persisted cache limit so the budget survives restarts
+  // (otherwise it silently resets to the 8 GB default every launch).
+  cacheManager = new CacheManager(db, db.getCacheLimitBytes() ?? undefined)
   cacheManager.evict().then(({ evicted, freedBytes }) => {
     if (evicted > 0) {
       console.log(`Startup eviction: freed ${(freedBytes / 1024 / 1024).toFixed(1)} MB (${evicted} files)`)

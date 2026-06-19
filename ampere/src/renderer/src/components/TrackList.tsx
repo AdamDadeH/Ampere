@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useLibraryStore, Track } from '../stores/library'
 import { AlbumArt } from './AlbumArt'
 import { ContextMenu, ContextMenuItem } from './ContextMenu'
@@ -6,6 +6,11 @@ import { musicAdapter } from '../../../shared/adapters/music'
 import type { ColumnDef } from '../../../shared/media-adapter'
 
 const adapter = musicAdapter
+
+// Fixed-height row windowing. Rows are ~52px (36px artwork + py-2). OVERSCAN
+// rows above/below the viewport keep scrolling smooth.
+const ROW_HEIGHT = 52
+const OVERSCAN = 8
 
 function formatDuration(seconds: number): string {
   const mins = Math.floor(seconds / 60)
@@ -20,18 +25,52 @@ interface ContextMenuState {
 }
 
 export function TrackList(): React.JSX.Element {
-  const {
-    tracks, currentTrack, isPlaying, currentView,
-    selectedArtist, selectedAlbum, searchQuery,
-    playTrack, setView, setSearchQuery, togglePin
-  } = useLibraryStore()
+  // Granular selectors: subscribe only to the slices this list renders. In
+  // particular it must NOT subscribe to `currentTime` (updated ~4×/sec during
+  // playback) — selecting `currentTrack?.id` as a primitive means the list
+  // re-renders on a track *change*, never on a playback tick.
+  const tracks = useLibraryStore(s => s.tracks)
+  const currentTrackId = useLibraryStore(s => s.currentTrack?.id ?? null)
+  const isPlaying = useLibraryStore(s => s.isPlaying)
+  const currentView = useLibraryStore(s => s.currentView)
+  const selectedArtist = useLibraryStore(s => s.selectedArtist)
+  const selectedAlbum = useLibraryStore(s => s.selectedAlbum)
+  const searchQuery = useLibraryStore(s => s.searchQuery)
+  const playTrack = useLibraryStore(s => s.playTrack)
+  const setView = useLibraryStore(s => s.setView)
+  const setSearchQuery = useLibraryStore(s => s.setSearchQuery)
+  const togglePin = useLibraryStore(s => s.togglePin)
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+
+  // Row virtualization: only the visible window of <tr> is mounted. Viewport
+  // height is tracked via ResizeObserver where available, with an 800px
+  // fallback so the window is sane before the first measurement.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  const [viewportH, setViewportH] = useState(800)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const update = (): void => setViewportH(el.clientHeight || 800)
+    update()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   const handleContextMenu = useCallback((e: React.MouseEvent, trackId: string) => {
     e.preventDefault()
     setContextMenu({ x: e.clientX, y: e.clientY, trackId })
   }, [])
+
+  // Stable across renders so memoized rows don't re-render on every parent
+  // render. Only changes when the list or search source changes (which is when
+  // every row legitimately needs to re-render anyway).
+  const handlePlay = useCallback((track: Track) => {
+    playTrack(track, tracks, searchQuery ? 'search_play' : 'intentional_select')
+  }, [playTrack, tracks, searchQuery])
 
   const title = (() => {
     if (searchQuery) return `Search: "${searchQuery}"`
@@ -43,6 +82,13 @@ export function TrackList(): React.JSX.Element {
 
   // Filter columns: title is rendered specially (with artwork), rating has a custom renderer
   const columns = adapter.columns
+
+  // Visible window into `tracks`. Spacer rows above/below preserve scroll height.
+  const total = tracks.length
+  const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN)
+  const endIndex = Math.min(total, Math.ceil((scrollTop + viewportH) / ROW_HEIGHT) + OVERSCAN)
+  const padTop = startIndex * ROW_HEIGHT
+  const padBottom = Math.max(0, (total - endIndex) * ROW_HEIGHT)
 
   const contextTrack = contextMenu ? tracks.find(t => t.id === contextMenu.trackId) : null
   const contextMenuItems: ContextMenuItem[] = contextTrack ? [
@@ -90,7 +136,11 @@ export function TrackList(): React.JSX.Element {
         <AlbumGrid />
       ) : (
         /* Track table */
-        <div className="flex-1 overflow-auto px-6">
+        <div
+          ref={scrollRef}
+          onScroll={e => setScrollTop(e.currentTarget.scrollTop)}
+          className="flex-1 overflow-auto px-6"
+        >
           <table className="w-full text-sm min-w-[800px]">
             <thead className="sticky top-0 bg-bg-primary z-10">
               <tr className="text-text-muted text-left border-b border-border-primary">
@@ -108,18 +158,31 @@ export function TrackList(): React.JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {tracks.map((track, i) => (
-                <TrackRow
-                  key={track.id}
-                  track={track}
-                  index={i}
-                  columns={columns}
-                  isCurrentTrack={currentTrack?.id === track.id}
-                  isPlaying={isPlaying && currentTrack?.id === track.id}
-                  onPlay={() => playTrack(track, tracks, searchQuery ? 'search_play' : 'intentional_select')}
-                  onContextMenu={handleContextMenu}
-                />
-              ))}
+              {padTop > 0 && (
+                <tr aria-hidden>
+                  <td colSpan={columns.length} style={{ height: padTop, padding: 0 }} />
+                </tr>
+              )}
+              {tracks.slice(startIndex, endIndex).map((track, k) => {
+                const i = startIndex + k
+                return (
+                  <TrackRow
+                    key={track.id}
+                    track={track}
+                    index={i}
+                    columns={columns}
+                    isCurrentTrack={currentTrackId === track.id}
+                    isPlaying={isPlaying && currentTrackId === track.id}
+                    onPlay={handlePlay}
+                    onContextMenu={handleContextMenu}
+                  />
+                )
+              })}
+              {padBottom > 0 && (
+                <tr aria-hidden>
+                  <td colSpan={columns.length} style={{ height: padBottom, padding: 0 }} />
+                </tr>
+              )}
             </tbody>
           </table>
           {tracks.length === 0 && (
@@ -143,7 +206,7 @@ export function TrackList(): React.JSX.Element {
   )
 }
 
-function TrackRow({
+const TrackRow = React.memo(function TrackRow({
   track, index, columns, isCurrentTrack, isPlaying, onPlay, onContextMenu
 }: {
   track: Track
@@ -151,9 +214,10 @@ function TrackRow({
   columns: ColumnDef[]
   isCurrentTrack: boolean
   isPlaying: boolean
-  onPlay: () => void
+  onPlay: (track: Track) => void
   onContextMenu: (e: React.MouseEvent, trackId: string) => void
 }): React.JSX.Element {
+  const play = (): void => onPlay(track)
   return (
     <tr
       className={`group cursor-pointer transition-colors ${
@@ -161,7 +225,7 @@ function TrackRow({
           ? 'bg-bg-highlight text-accent-text'
           : 'hover:bg-bg-tertiary/50 text-text-secondary'
       }`}
-      onDoubleClick={onPlay}
+      onDoubleClick={play}
       onContextMenu={(e) => onContextMenu(e, track.id)}
     >
       {columns.map(col => (
@@ -179,13 +243,13 @@ function TrackRow({
             index={index}
             isCurrentTrack={isCurrentTrack}
             isPlaying={isPlaying}
-            onPlay={onPlay}
+            onPlay={play}
           />
         </td>
       ))}
     </tr>
   )
-}
+})
 
 function CellContent({
   col, track, index, isCurrentTrack, isPlaying, onPlay
@@ -298,7 +362,10 @@ function StarRatingInline({ trackId, rating }: { trackId: string; rating: number
 }
 
 function AlbumGrid(): React.JSX.Element {
-  const { albums, tracks, selectAlbum, togglePin } = useLibraryStore()
+  const albums = useLibraryStore(s => s.albums)
+  const tracks = useLibraryStore(s => s.tracks)
+  const selectAlbum = useLibraryStore(s => s.selectAlbum)
+  const togglePin = useLibraryStore(s => s.togglePin)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; album: string; artist?: string } | null>(null)
 
   const handleAlbumContext = useCallback((e: React.MouseEvent, album: string, artist?: string) => {

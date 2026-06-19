@@ -611,6 +611,31 @@ export class LibraryDatabase {
     this.db.prepare('UPDATE tracks SET sync_status = ? WHERE id = ?').run(status, trackId)
   }
 
+  /** Read a persisted app setting, or null if unset. */
+  getSetting(key: string): string | null {
+    const row = this.db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as { value: string } | undefined
+    return row?.value ?? null
+  }
+
+  /** Persist an app setting (upsert). */
+  setSetting(key: string, value: string): void {
+    this.db.prepare(
+      'INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+    ).run(key, value)
+  }
+
+  /** Persisted cache size limit in bytes, or null to use the CacheManager default. */
+  getCacheLimitBytes(): number | null {
+    const raw = this.getSetting('cache_limit_bytes')
+    if (raw === null) return null
+    const n = Number(raw)
+    return Number.isFinite(n) && n > 0 ? n : null
+  }
+
+  setCacheLimitBytes(bytes: number): void {
+    this.setSetting('cache_limit_bytes', String(Math.round(bytes)))
+  }
+
   /**
    * Bulk update sync_status for tracks within a Proton Drive source path.
    * Used during the one-time migration from 'local' to 'cached' for existing PD tracks.
