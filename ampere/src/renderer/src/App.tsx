@@ -4,6 +4,7 @@ import { Sidebar } from './components/Sidebar'
 import { TrackList } from './components/TrackList'
 import { PlayerBar } from './components/PlayerBar'
 import { SetupView } from './components/SetupView'
+import { SettingsView } from './components/SettingsView'
 import { AudioEngine } from './components/AudioEngine'
 import { CompactPlayer } from './components/compact/CompactPlayer'
 import { RiemannNavigator } from './riemann/RiemannNavigator'
@@ -43,7 +44,7 @@ function LibraryApp(): React.JSX.Element {
         <>
           <div className="flex-1 flex min-h-0">
             <Sidebar />
-            {currentView === 'riemann' ? <RiemannNavigator /> : currentView === 'demoscene' ? <DemosceneVisualizer /> : <TrackList />}
+            {currentView === 'riemann' ? <RiemannNavigator /> : currentView === 'demoscene' ? <DemosceneVisualizer /> : currentView === 'settings' ? <SettingsView /> : <TrackList />}
           </div>
           <PlayerBar />
         </>

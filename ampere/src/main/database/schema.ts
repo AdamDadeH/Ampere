@@ -114,6 +114,11 @@ CREATE TABLE IF NOT EXISTS track_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_track ON track_feedback(track_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_created ON track_feedback(created_at);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `
 
 // Bump this when derived tables (track_artists, track_album_artists) need rebuilding.

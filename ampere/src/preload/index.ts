@@ -83,7 +83,7 @@ export interface ElectronAPI {
   addStorageSource(source: { id: string; type: string; root_path: string; label?: string; proton_email?: string }): Promise<void>
   removeStorageSource(sourceId: string): Promise<void>
   // Cloud-first: cache management
-  getCacheStats(): Promise<{ totalTracks: number; cachedTracks: number; cloudOnlyTracks: number; pinnedTracks: number; cachedBytes: number; pinnedBytes: number }>
+  getCacheStats(): Promise<{ totalTracks: number; cachedTracks: number; cloudOnlyTracks: number; pinnedTracks: number; cachedBytes: number; pinnedBytes: number; maxSizeBytes: number }>
   setCacheLimit(bytes: number): Promise<void>
   pinTrack(trackId: string): Promise<void>
   unpinTrack(trackId: string): Promise<void>

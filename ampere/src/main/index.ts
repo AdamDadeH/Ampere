@@ -472,11 +472,13 @@ function setupIPC(): void {
     db.removeStorageSource(sourceId)
   })
 
-  // Cloud-first: cache management
-  ipcMain.handle('get-cache-stats', () => db.getCacheStats())
+  // Cloud-first: cache management. getStats() merges the live maxSizeBytes
+  // from the cache manager onto the DB-derived counts.
+  ipcMain.handle('get-cache-stats', () => cacheManager.getStats())
 
   ipcMain.handle('set-cache-limit', (_event, bytes: number) => {
     cacheManager.setMaxSize(bytes)
+    db.setCacheLimitBytes(bytes)
   })
 
   ipcMain.handle('pin-track', (_event, trackId: string) => {
@@ -581,8 +583,10 @@ app.whenReady().then(async () => {
     }
   }
 
-  // Initialize cache manager and run initial eviction pass
-  cacheManager = new CacheManager(db)
+  // Initialize cache manager and run initial eviction pass.
+  // Honor a persisted cache limit so the budget survives restarts
+  // (otherwise it silently resets to the 8 GB default every launch).
+  cacheManager = new CacheManager(db, db.getCacheLimitBytes() ?? undefined)
   cacheManager.evict().then(({ evicted, freedBytes }) => {
     if (evicted > 0) {
       console.log(`Startup eviction: freed ${(freedBytes / 1024 / 1024).toFixed(1)} MB (${evicted} files)`)
