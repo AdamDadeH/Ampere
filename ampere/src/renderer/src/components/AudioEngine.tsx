@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback } from 'react'
 import { useLibraryStore } from '../stores/library'
-import type { PlayerState } from '../../../../preload/index'
 import { analyserBridge } from '../audio/analyser-bridge'
+import { runBroadcastTick } from '../audio/player-broadcast'
 import { recordInteraction, setForeground } from '../stores/attention'
 
 const SPECTRUM_BINS = 128
@@ -10,45 +10,6 @@ const emptyFrequencyData: number[] = new Array(SPECTRUM_BINS).fill(0)
 // Standard 10-band Winamp EQ frequencies
 const EQ_FREQUENCIES = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000, 16000]
 
-// Cache queueTracks to avoid recomputing on every broadcast
-let cachedQueueRef: unknown[] = []
-let cachedQueueTracks: { title: string; artist: string | null; duration: number }[] = []
-
-function buildPlayerState(state: ReturnType<typeof useLibraryStore.getState>, frequencyData: number[]): PlayerState {
-  // Only recompute queueTracks when the queue array reference changes
-  if (state.queue !== cachedQueueRef) {
-    cachedQueueRef = state.queue
-    cachedQueueTracks = state.queue.map(t => ({
-      title: t.title || t.file_name,
-      artist: t.artist,
-      duration: t.duration,
-    }))
-  }
-
-  return {
-    isPlaying: state.isPlaying,
-    currentTime: state.currentTime,
-    duration: state.duration,
-    volume: state.volume,
-    trackTitle: state.currentTrack!.title || state.currentTrack!.file_name,
-    trackArtist: state.currentTrack!.artist,
-    trackAlbum: state.currentTrack!.album,
-    artworkPath: state.currentTrack!.artwork_path,
-    bitrate: state.currentTrack!.bitrate,
-    sampleRate: state.currentTrack!.sample_rate,
-    codec: state.currentTrack!.codec,
-    queueIndex: state.queueIndex,
-    queueLength: state.queue.length,
-    shuffle: state.shuffle,
-    repeatMode: state.repeatMode,
-    frequencyData,
-    eqEnabled: state.eqEnabled,
-    eqPreamp: state.eqPreamp,
-    eqBands: state.eqBands,
-    queueTracks: cachedQueueTracks,
-  }
-}
-
 export function AudioEngine(): React.JSX.Element {
   const audioRef = useRef<HTMLAudioElement>(null)
   const playCountedRef = useRef(false)
@@ -56,6 +17,9 @@ export function AudioEngine(): React.JSX.Element {
   const analyserRef = useRef<AnalyserNode | null>(null)
   const frequencyArrayRef = useRef<Uint8Array | null>(null)
   const audioInitRef = useRef(false)
+  // The compact (Winamp) window is the only consumer of broadcast frames.
+  // When it's closed we skip the whole 4Hz loop (frequency extraction + IPC).
+  const compactOpenRef = useRef(false)
 
   // Pause-abandon tracking
   const pauseTimestampRef = useRef<number | null>(null)
@@ -146,11 +110,14 @@ export function AudioEngine(): React.JSX.Element {
     return Array.from(arr)
   }, [])
 
-  // Send an immediate broadcast to the compact window
+  // Send an immediate broadcast to the compact window (no-op if it's closed)
   const broadcastNow = useCallback(() => {
-    const state = useLibraryStore.getState()
-    if (!state.currentTrack) return
-    window.api.sendPlayerState(buildPlayerState(state, getFrequencyData()))
+    runBroadcastTick({
+      compactOpen: compactOpenRef.current,
+      state: useLibraryStore.getState(),
+      getFrequencyData,
+      send: (s) => window.api.sendPlayerState(s),
+    })
   }, [getFrequencyData])
 
   // Load track when the track *identity* changes (not when metadata like rating updates)
@@ -279,12 +246,15 @@ export function AudioEngine(): React.JSX.Element {
     nextTrack('auto_advance')
   }, [nextTrack])
 
-  // Broadcast player state to compact window at 4Hz
+  // Broadcast player state to compact window at 4Hz — only while it's open
   useEffect(() => {
     broadcastIntervalRef.current = window.setInterval(() => {
-      const state = useLibraryStore.getState()
-      if (!state.currentTrack) return
-      window.api.sendPlayerState(buildPlayerState(state, getFrequencyData()))
+      runBroadcastTick({
+        compactOpen: compactOpenRef.current,
+        state: useLibraryStore.getState(),
+        getFrequencyData,
+        send: (s) => window.api.sendPlayerState(s),
+      })
     }, 250)
 
     return () => {
@@ -293,6 +263,16 @@ export function AudioEngine(): React.JSX.Element {
       }
     }
   }, [getFrequencyData])
+
+  // Track compact-window presence; broadcast immediately when it opens so it
+  // doesn't wait up to 250ms for its first frame.
+  useEffect(() => {
+    const unsubscribe = window.api.onCompactPresence((open: boolean) => {
+      compactOpenRef.current = open
+      if (open) broadcastNow()
+    })
+    return unsubscribe
+  }, [broadcastNow])
 
   // Listen for remote commands from compact window
   useEffect(() => {

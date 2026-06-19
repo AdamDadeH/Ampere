@@ -167,6 +167,15 @@ function touchFileByPath(filePath: string): void {
   }
 }
 
+/** Tell the library window whether the compact window is open, so it can
+ *  gate the 4Hz player-state broadcast (the compact window is its only
+ *  consumer). */
+function notifyCompactPresence(open: boolean): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('compact-presence', open)
+  }
+}
+
 /** Notify renderer that a download completed */
 function notifyDownloadComplete(trackId: string): void {
   const windows = [mainWindow, compactWindow]
@@ -258,11 +267,16 @@ function createCompactWindow(): void {
 
   compactWindow.on('closed', () => {
     compactWindow = null
+    notifyCompactPresence(false)
     // Show library window when compact is closed
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.show()
     }
   })
+
+  // Once the compact window has loaded and subscribed, tell the library window
+  // to start broadcasting (and push an immediate first frame).
+  compactWindow.webContents.once('did-finish-load', () => notifyCompactPresence(true))
 }
 
 function setupIPC(): void {
