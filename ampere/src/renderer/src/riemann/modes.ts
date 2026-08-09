@@ -8,7 +8,7 @@
  *
  * Adding a mode means adding an entry here and a label in NAV_MODES.
  */
-import { createDriftState, driftNext, DriftState } from './navigation'
+import { createDriftState, embeddingDriftNext, DriftState } from './navigation'
 import { semanticDriftNext } from './semantic-drift'
 import { NavData } from './nav-data'
 import { evidenceWeight, pickBest, SessionSignal } from './session-affinity'
@@ -63,10 +63,10 @@ export interface NavMode {
 const spatialDrift: NavMode = {
   id: 'drift',
   label: 'Drift',
-  description: 'Walks to nearby tracks in audio-feature space.',
-  isAvailable: (data) => data.knn.neighbors.size > 0,
+  description: 'Steps to the nearest unheard track in audio-embedding space.',
+  isAvailable: (data) => data.featureMap.size > 0,
   next: ({ data, state, currentTrackId }) => {
-    const trackId = driftNext(state, data.knn, currentTrackId)
+    const trackId = embeddingDriftNext(state, data.featureMap, currentTrackId)
     return trackId ? { trackId, source: 'drift', tier: null } : null
   }
 }

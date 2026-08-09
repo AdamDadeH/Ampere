@@ -31,47 +31,51 @@ describe('isNavMode', () => {
   })
 })
 
-describe('drift mode', () => {
-  const data = dataWith({ knn: knnOf({ a: ['b', 'c'], b: ['c', 'a'], c: ['a'] }) })
+// Unit vectors with known angles: b is close to a (cos 0.9), c is orthogonal
+// to a. Nearest-neighbour order from a is therefore b, then c.
+const vecs = new Map<string, number[]>([
+  ['a', [1, 0]],
+  ['b', [0.9, Math.sqrt(1 - 0.81)]],
+  ['c', [0, 1]]
+])
 
-  it('steps to the nearest neighbour and tags provenance', () => {
+describe('drift mode', () => {
+  const data = dataWith({ featureMap: vecs })
+
+  it('steps to the nearest track in embedding space and tags provenance', () => {
     const step = selectNext('drift', { data, state: createDriftState('a'), currentTrackId: 'a', coherence: 0.7 })
     expect(step).toEqual({ trackId: 'b', source: 'drift', tier: null })
   })
 
-  it('prefers unvisited neighbours as the walk proceeds', () => {
+  it('prefers unheard tracks as the walk proceeds', () => {
     const state = createDriftState('a')
     expect(selectNext('drift', { data, state, currentTrackId: 'a', coherence: 0.7 })?.trackId).toBe('b')
+    // From b the nearest is a, but a has been played — so it must move to c.
     expect(selectNext('drift', { data, state, currentTrackId: 'b', coherence: 0.7 })?.trackId).toBe('c')
   })
 
-  it('returns null when the track has no neighbours', () => {
+  it('revisits the nearest track rather than stalling once all are heard', () => {
+    const state = createDriftState('a')
+    state.visited.add('b')
+    state.visited.add('c')
+    expect(selectNext('drift', { data, state, currentTrackId: 'a', coherence: 0.7 })?.trackId).toBe('b')
+  })
+
+  it('returns null for a track with no embedding', () => {
     const step = selectNext('drift', { data, state: createDriftState('z'), currentTrackId: 'z', coherence: 0.7 })
     expect(step).toBeNull()
   })
 
-  it('is unavailable against an empty graph', () => {
+  it('does not depend on the UMAP-derived graph', () => {
+    // The projection is unseeded and refits as the library grows; drift must
+    // be a function of the embeddings alone so its metrics stay comparable.
+    const noGraph = dataWith({ featureMap: vecs, knn: knnOf({}) })
+    expect(NAV_MODES.drift.isAvailable(noGraph)).toBe(true)
+    expect(selectNext('drift', { data: noGraph, state: createDriftState('a'), currentTrackId: 'a', coherence: 0.7 })?.trackId).toBe('b')
+  })
+
+  it('is unavailable with no embeddings', () => {
     expect(NAV_MODES.drift.isAvailable(dataWith({}))).toBe(false)
-    expect(NAV_MODES.drift.isAvailable(data)).toBe(true)
-  })
-})
-
-describe('journey mode', () => {
-  it('is unavailable without a semantic index', () => {
-    expect(NAV_MODES.journey.isAvailable(dataWith({}))).toBe(false)
-  })
-
-  it('falls back to spatial drift on a map with no Semantic IDs', () => {
-    // Preserves what the 3D view did before extraction: journey on the Meyda
-    // map silently behaves as spatial drift rather than stalling.
-    const data = dataWith({ knn: knnOf({ a: ['b'] }) })
-    const step = selectNext('journey', { data, state: createDriftState('a'), currentTrackId: 'a', coherence: 0.7 })
-    expect(step).toEqual({ trackId: 'b', source: 'drift', tier: null })
-  })
-
-  it('returns null when neither journey nor the drift fallback can move', () => {
-    const step = selectNext('journey', { data: dataWith({}), state: createDriftState('a'), currentTrackId: 'a', coherence: 0.7 })
-    expect(step).toBeNull()
   })
 })
 
