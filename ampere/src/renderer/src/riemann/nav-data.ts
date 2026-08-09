@@ -106,13 +106,19 @@ export function normalizeToNodes(coordData: readonly CoordRow[]): TrackNode[] {
   }))
 }
 
-/** Build the full navigation graph from coord rows and feature vectors. */
+/**
+ * Build the full navigation graph from coord rows.
+ *
+ * `allFeatures` is optional because coord rows already carry `features_json`;
+ * passing it separately means shipping and parsing the same vectors twice.
+ * Only supply it when the feature set genuinely differs from the coord set.
+ */
 export function buildNavData(
   coordData: readonly CoordRow[],
-  allFeatures: readonly { track_id: string; features_json: string }[]
+  allFeatures?: readonly { track_id: string; features_json: string }[]
 ): NavData {
   const featureMap = new Map<string, number[]>()
-  for (const f of allFeatures) {
+  for (const f of allFeatures ?? coordData) {
     featureMap.set(f.track_id, JSON.parse(f.features_json) as number[])
   }
 
@@ -133,10 +139,15 @@ export function buildNavData(
   return { nodes, trackIdToIndex, knn, semanticIndex, featureMap }
 }
 
-/** Load coords + features for a source and build the graph. */
+/**
+ * Load the graph for a source.
+ *
+ * One round trip: `withCoords` already includes the feature vectors, and at
+ * ~10k tracks x 512 dims these payloads are large enough that fetching them
+ * twice is the difference between a mode being usable and appearing dead.
+ */
 export async function loadNavData(source: FeatureSource): Promise<NavData | null> {
-  const api = featureApi(source)
-  const [coordData, allFeatures] = await Promise.all([api.withCoords(), api.features()])
+  const coordData = await featureApi(source).withCoords()
   if (coordData.length === 0) return null
-  return buildNavData(coordData, allFeatures)
+  return buildNavData(coordData)
 }
