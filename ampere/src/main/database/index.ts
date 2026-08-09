@@ -4,7 +4,10 @@ import { join } from 'path'
 import { mkdirSync } from 'fs'
 import { SCHEMA_SQL, SCHEMA_VERSION } from './schema'
 import { sessionize, currentSession, SESSION_GAP_MS } from './sessions'
-import { pairOutcomes, summarize, onSurface, type ModePerformance } from './nav-performance'
+import {
+  pairOutcomes, summarize, summarizeByKind, completionHistogram, onSurface,
+  type ModePerformance, type SessionKind
+} from './nav-performance'
 import { parseArtists, isBrowsableArtist } from '../scanner/artist-parser'
 import { importSemanticIndex, type SemanticImportReport } from './clap-import'
 
@@ -848,6 +851,42 @@ export class LibraryDatabase {
     const events = this.getAllFeedback()
     const paired = pairOutcomes(events)
     return summarize(surface ? onSurface(paired, surface) : paired)
+  }
+
+  /**
+   * Everything the monitoring panel needs, recomputed under the caller's
+   * thresholds.
+   *
+   * The thresholds are inputs rather than settings because where "sustained"
+   * begins is not settled and moving it changes the conclusion. Recomputing
+   * is trivial at this scale, so the panel can show how sensitive a finding
+   * is instead of presenting one cut as fact.
+   */
+  getNavReport(opts?: {
+    surface?: string
+    sustainedThreshold?: number
+    rejectedThreshold?: number
+    samplingGapSeconds?: number
+  }): {
+    byKind: { kind: SessionKind; rows: ModePerformance[]; n: number }[]
+    histogram: { mode: string; counts: number[]; n: number }[]
+    overall: ModePerformance[]
+    totalOutcomes: number
+    taggedOutcomes: number
+    versions: { id: number; embedding_version: string; codebook_version: string; n_tracks: number | null; activated_at: string }[]
+  } {
+    const events = this.getAllFeedback()
+    const all = pairOutcomes(events, undefined, opts?.samplingGapSeconds)
+    const scoped = opts?.surface ? onSurface(all, opts.surface) : all
+
+    return {
+      byKind: summarizeByKind(scoped, opts?.sustainedThreshold, opts?.rejectedThreshold),
+      histogram: completionHistogram(scoped),
+      overall: summarize(scoped, opts?.sustainedThreshold, opts?.rejectedThreshold),
+      totalOutcomes: all.length,
+      taggedOutcomes: all.filter(o => o.surface !== null).length,
+      versions: this.getIndexVersions()
+    }
   }
 
   /** Every feedback event, oldest first — the input to session derivation. */

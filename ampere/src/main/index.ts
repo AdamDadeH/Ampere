@@ -550,6 +550,8 @@ function setupIPC(): void {
 
   ipcMain.handle('get-current-session-feedback', () => db.getCurrentSessionFeedback())
 
+  ipcMain.handle('get-nav-report', (_event, opts) => db.getNavReport(opts))
+
   ipcMain.handle('get-track-feedback', (_event, trackId: string) => {
     return db.getTrackFeedback(trackId)
   })

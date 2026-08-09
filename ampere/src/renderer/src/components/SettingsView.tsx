@@ -20,6 +20,8 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
 }
 
+import { NavMonitor } from './NavMonitor'
+
 export function SettingsView(): React.JSX.Element {
   const [stats, setStats] = useState<CacheStats | null>(null)
   const [limitGb, setLimitGb] = useState('')
@@ -197,6 +199,16 @@ export function SettingsView(): React.JSX.Element {
         </section>
 
         <section className="mb-8">
+          <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Navigation</h2>
+          <p className="text-sm text-text-muted mb-4">
+            How each play mode performs, split by the kind of session it happened in —
+            skipping fast is correct when sampling and a failure when settled, so the two
+            are not pooled.
+          </p>
+          <NavMonitor />
+        </section>
+
+        <section className="mb-10">
           <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Maintenance</h2>
           <button
             onClick={runEviction}

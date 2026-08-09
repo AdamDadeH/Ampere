@@ -36,6 +36,15 @@ export interface TrackPathResult {
   syncStatus: string
 }
 
+export interface NavModeStat {
+  mode: string
+  n: number
+  sustained: number
+  rejected: number
+  sustainedRate: number
+  rejectedRate: number
+}
+
 export interface ElectronAPI {
   selectFolder(): Promise<string | null>
   getTracks(filter?: { artist?: string; album?: string }): Promise<unknown[]>
@@ -107,6 +116,14 @@ export interface ElectronAPI {
   recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null, surface: string | null): Promise<void>
   getTrackFeedback(trackId: string): Promise<{ id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; surface: string | null; created_at: string }[]>
   getCurrentSessionFeedback(): Promise<{ track_id: string; event_type: string; event_value: number | null; surface: string | null; created_at: string }[]>
+  getNavReport(opts?: { surface?: string; sustainedThreshold?: number; rejectedThreshold?: number; samplingGapSeconds?: number }): Promise<{
+    byKind: { kind: 'sampling' | 'listening'; rows: NavModeStat[]; n: number }[]
+    histogram: { mode: string; counts: number[]; n: number }[]
+    overall: NavModeStat[]
+    totalOutcomes: number
+    taggedOutcomes: number
+    versions: { id: number; embedding_version: string; codebook_version: string; n_tracks: number | null; activated_at: string }[]
+  }>
   recomputeInferredRatings(): Promise<void>
   onInferredRatingsUpdated(callback: (ratings: { id: string; inferred_rating: number }[]) => void): () => void
 }
@@ -201,6 +218,7 @@ const api: ElectronAPI = {
     ipcRenderer.invoke('record-feedback', trackId, eventType, eventValue, attentionWeight, source, surface),
   getTrackFeedback: (trackId) => ipcRenderer.invoke('get-track-feedback', trackId),
   getCurrentSessionFeedback: () => ipcRenderer.invoke('get-current-session-feedback'),
+  getNavReport: (opts?) => ipcRenderer.invoke('get-nav-report', opts),
   recomputeInferredRatings: () => ipcRenderer.invoke('recompute-inferred-ratings'),
   onInferredRatingsUpdated: (callback) => {
     const handler = (_event: unknown, ratings: { id: string; inferred_rating: number }[]): void => callback(ratings)
