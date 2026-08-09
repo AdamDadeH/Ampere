@@ -4,6 +4,7 @@ import { join } from 'path'
 import { mkdirSync } from 'fs'
 import { SCHEMA_SQL, SCHEMA_VERSION } from './schema'
 import { sessionize, currentSession, SESSION_GAP_MS } from './sessions'
+import { pairOutcomes, summarize, onSurface, type ModePerformance } from './nav-performance'
 import { parseArtists, isBrowsableArtist } from '../scanner/artist-parser'
 import { importSemanticIndex, type SemanticImportReport } from './clap-import'
 
@@ -137,6 +138,7 @@ export class LibraryDatabase {
     }
 
     this.backfillIfNeeded()
+    this.backfillIndexVersion()
   }
 
   /**
@@ -556,7 +558,22 @@ export class LibraryDatabase {
 
   /** Import the standalone vq index, joining by file_path. Derived data only. */
   importSemanticIndex(vqDbPath: string): SemanticImportReport {
-    return importSemanticIndex(this.db, vqDbPath)
+    const report = importSemanticIndex(this.db, vqDbPath)
+
+    // Stamp the artifacts this import brought in. Navigation behaviour is a
+    // function of them, so without this the log cannot tell whether a change
+    // in a mode's performance came from the mode or from a new index.
+    const meta = new Map(
+      (this.db.prepare('SELECT key, value FROM semantic_meta').all() as { key: string; value: string }[])
+        .map(m => [m.key, m.value])
+    )
+    const embedding = meta.get('clap_model')
+    const codebook = meta.get('source_model')
+    if (embedding && codebook) {
+      this.recordIndexVersion(embedding, codebook, report.matched ?? null)
+    }
+
+    return report
   }
 
   getSemanticCount(): number {
@@ -771,6 +788,66 @@ export class LibraryDatabase {
     return this.db.prepare(
       'SELECT * FROM track_feedback WHERE track_id = ? ORDER BY created_at DESC'
     ).all(trackId) as FeedbackRow[]
+  }
+
+  /**
+   * Append an index version if it differs from the current head.
+   *
+   * Called after a semantic import. Idempotent: re-importing identical
+   * artifacts does not create a new version, so the log records genuine
+   * changes rather than every run.
+   */
+  recordIndexVersion(embeddingVersion: string, codebookVersion: string, nTracks: number | null): void {
+    const head = this.db.prepare(
+      'SELECT embedding_version, codebook_version FROM index_versions ORDER BY id DESC LIMIT 1'
+    ).get() as { embedding_version: string; codebook_version: string } | undefined
+
+    if (head && head.embedding_version === embeddingVersion && head.codebook_version === codebookVersion) return
+
+    this.db.prepare(
+      'INSERT INTO index_versions (embedding_version, codebook_version, n_tracks) VALUES (?, ?, ?)'
+    ).run(embeddingVersion, codebookVersion, nTracks)
+  }
+
+  getIndexVersions(): { id: number; embedding_version: string; codebook_version: string; n_tracks: number | null; activated_at: string }[] {
+    return this.db.prepare(
+      'SELECT * FROM index_versions ORDER BY activated_at ASC'
+    ).all() as { id: number; embedding_version: string; codebook_version: string; n_tracks: number | null; activated_at: string }[]
+  }
+
+  /**
+   * Give existing history a version to belong to.
+   *
+   * `semantic_meta` already records which models produced the current index,
+   * but not when they became active. Backdating the first row to the oldest
+   * embedding means every event ever logged falls inside a known version
+   * rather than being unattributable.
+   */
+  private backfillIndexVersion(): void {
+    const existing = this.db.prepare('SELECT COUNT(*) c FROM index_versions').get() as { c: number }
+    if (existing.c > 0) return
+
+    const meta = this.db.prepare('SELECT key, value FROM semantic_meta').all() as { key: string; value: string }[]
+    if (meta.length === 0) return
+    const byKey = new Map(meta.map(m => [m.key, m.value]))
+    const embedding = byKey.get('clap_model')
+    const codebook = byKey.get('source_model')
+    if (!embedding || !codebook) return
+
+    const oldest = this.db.prepare(
+      'SELECT MIN(computed_at) t FROM track_semantic'
+    ).get() as { t: string | null }
+
+    this.db.prepare(
+      'INSERT INTO index_versions (embedding_version, codebook_version, n_tracks, activated_at) VALUES (?, ?, ?, ?)'
+    ).run(embedding, codebook, Number(byKey.get('n_tracks')) || null, oldest.t ?? '1970-01-01 00:00:00')
+  }
+
+  /** Per-mode performance from the feedback log. See nav-performance.ts. */
+  getNavPerformance(surface?: string): ModePerformance[] {
+    const events = this.getAllFeedback()
+    const paired = pairOutcomes(events)
+    return summarize(surface ? onSurface(paired, surface) : paired)
   }
 
   /** Every feedback event, oldest first — the input to session derivation. */

@@ -153,6 +153,29 @@ CREATE TABLE IF NOT EXISTS track_feedback (
 CREATE INDEX IF NOT EXISTS idx_feedback_track ON track_feedback(track_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_created ON track_feedback(created_at);
 
+-- Which index artifacts were active when, so per-mode performance can be
+-- scoped to a comparable period.
+--
+-- Drift and session are functions of the CLAP model; journey additionally
+-- depends on the RQ-VAE codebook. Change either and the same mode becomes a
+-- different mode, so pooling its statistics across the change is invalid.
+--
+-- A log rather than a column on track_feedback: these change rarely, so an
+-- event's version is whichever row was active at its created_at. That also
+-- means history recorded before this table existed is still attributable.
+--
+-- The UMAP projection is deliberately absent. It is unseeded and refits
+-- whenever the library grows, but no navigation mode depends on it any more —
+-- it positions the 3D view and nothing else.
+CREATE TABLE IF NOT EXISTS index_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  embedding_version TEXT NOT NULL,
+  codebook_version TEXT NOT NULL,
+  n_tracks INTEGER,
+  activated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_index_versions_activated ON index_versions(activated_at);
+
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
