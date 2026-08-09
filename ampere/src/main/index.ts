@@ -548,6 +548,8 @@ function setupIPC(): void {
     db.recordFeedback(trackId, eventType, eventValue, attentionWeight, source, surface)
   })
 
+  ipcMain.handle('get-current-session-feedback', () => db.getCurrentSessionFeedback())
+
   ipcMain.handle('get-track-feedback', (_event, trackId: string) => {
     return db.getTrackFeedback(trackId)
   })

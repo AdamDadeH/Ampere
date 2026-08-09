@@ -11,6 +11,7 @@
 import { create } from 'zustand'
 import { FeatureSource, NavData, loadNavData } from '../riemann/nav-data'
 import { createDriftState, DriftState, NavModeId, NavStep, selectNext } from '../riemann/modes'
+import { sessionSignals, SessionSignal } from '../riemann/session-affinity'
 
 interface NavigationState {
   data: NavData | null
@@ -21,6 +22,8 @@ interface NavigationState {
   coherence: number
   /** Semantic tier of the last journey step, for display. */
   lastTier: string | null
+  /** Signed preference signals from the session in progress, oldest first. */
+  signals: SessionSignal[]
 
   /** Load the graph if it isn't loaded already. Safe to call repeatedly. */
   ensureLoaded: () => Promise<void>
@@ -32,8 +35,19 @@ interface NavigationState {
   resetWalk: (trackId: string) => void
   /** Record that a track was played, so a walk won't revisit it. */
   markVisited: (trackId: string) => void
-  /** Ask the active mode for the next track. Null when it cannot move. */
-  next: (mode: NavModeId, currentTrackId: string) => NavStep | null
+  /** Pull the live session's events and reduce them to signals. */
+  refreshSession: () => Promise<void>
+  /**
+   * Ask the active mode for the next track. Null when it cannot move.
+   * `globalPreference` is supplied by the caller — the library store owns
+   * inferred ratings, and reaching back for them here would make the two
+   * stores mutually dependent.
+   */
+  next: (
+    mode: NavModeId,
+    currentTrackId: string,
+    globalPreference?: (trackId: string) => number
+  ) => NavStep | null
 }
 
 export const useNavigationStore = create<NavigationState>((set, get) => ({
@@ -43,6 +57,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   driftState: null,
   coherence: 0.7,
   lastTier: null,
+  signals: [],
 
   ensureLoaded: async () => {
     const { data, isLoading, source } = get()
@@ -81,8 +96,17 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     driftState.trajectory.push(trackId)
   },
 
-  next: (mode, currentTrackId) => {
-    const { data, coherence } = get()
+  refreshSession: async () => {
+    try {
+      const events = await window.api.getCurrentSessionFeedback()
+      set({ signals: sessionSignals(events) })
+    } catch (err) {
+      console.error('Failed to load session feedback', err)
+    }
+  },
+
+  next: (mode, currentTrackId, globalPreference) => {
+    const { data, coherence, signals } = get()
     if (!data) return null
 
     let { driftState } = get()
@@ -91,7 +115,13 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       set({ driftState })
     }
 
-    const step = selectNext(mode, { data, state: driftState, currentTrackId, coherence })
+    const step = selectNext(mode, {
+      data,
+      state: driftState,
+      currentTrackId,
+      coherence,
+      session: globalPreference ? { signals, globalPreference } : undefined
+    })
     set({ lastTier: step?.tier ?? null })
     return step
   }

@@ -106,6 +106,7 @@ export interface ElectronAPI {
   // Feedback
   recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null, surface: string | null): Promise<void>
   getTrackFeedback(trackId: string): Promise<{ id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; surface: string | null; created_at: string }[]>
+  getCurrentSessionFeedback(): Promise<{ track_id: string; event_type: string; event_value: number | null; surface: string | null; created_at: string }[]>
   recomputeInferredRatings(): Promise<void>
   onInferredRatingsUpdated(callback: (ratings: { id: string; inferred_rating: number }[]) => void): () => void
 }
@@ -199,6 +200,7 @@ const api: ElectronAPI = {
   recordFeedback: (trackId, eventType, eventValue, attentionWeight, source, surface) =>
     ipcRenderer.invoke('record-feedback', trackId, eventType, eventValue, attentionWeight, source, surface),
   getTrackFeedback: (trackId) => ipcRenderer.invoke('get-track-feedback', trackId),
+  getCurrentSessionFeedback: () => ipcRenderer.invoke('get-current-session-feedback'),
   recomputeInferredRatings: () => ipcRenderer.invoke('recompute-inferred-ratings'),
   onInferredRatingsUpdated: (callback) => {
     const handler = (_event: unknown, ratings: { id: string; inferred_rating: number }[]): void => callback(ratings)

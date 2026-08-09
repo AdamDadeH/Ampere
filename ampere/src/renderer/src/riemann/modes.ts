@@ -11,9 +11,10 @@
 import { createDriftState, driftNext, DriftState } from './navigation'
 import { semanticDriftNext } from './semantic-drift'
 import { NavData } from './nav-data'
+import { evidenceWeight, pickBest, SessionSignal } from './session-affinity'
 
 /** Modes that walk a graph, as opposed to the queue orders (linear/random). */
-export type NavModeId = 'drift' | 'journey'
+export type NavModeId = 'drift' | 'journey' | 'session'
 
 /** Every play mode the selector offers. */
 export type PlayMode = 'linear' | 'random' | NavModeId
@@ -38,6 +39,15 @@ export interface NavContext {
   currentTrackId: string
   /** Journey coherence, 0–1. Ignored by spatial drift. */
   coherence: number
+  /**
+   * Live session context. Absent when nothing has been played yet this
+   * session, in which case the session mode has nothing to go on.
+   */
+  session?: {
+    signals: SessionSignal[]
+    /** Global preference for a track, normalized to [0, 1]. */
+    globalPreference: (trackId: string) => number
+  }
 }
 
 export interface NavMode {
@@ -84,13 +94,38 @@ const semanticJourney: NavMode = {
   }
 }
 
+const sessionMode: NavMode = {
+  id: 'session',
+  label: 'Session',
+  description: 'Follows what you are sustaining right now, over your overall taste.',
+  isAvailable: (data) => data.featureMap.size > 0,
+  next: ({ data, state, session }) => {
+    if (!session) return null
+    const candidates: { trackId: string; globalPreference: number }[] = []
+    for (const trackId of data.featureMap.keys()) {
+      candidates.push({ trackId, globalPreference: session.globalPreference(trackId) })
+    }
+    const best = pickBest(candidates, session.signals, data.featureMap, state.visited)
+    if (!best) return null
+    // Record how much the session was actually steering, so a play can later
+    // be attributed to session evidence rather than to the global prior.
+    const beta = evidenceWeight(session.signals.length)
+    return {
+      trackId: best.trackId,
+      source: `session:${session.signals.length}:${beta.toFixed(2)}`,
+      tier: null
+    }
+  }
+}
+
 export const NAV_MODES: Record<NavModeId, NavMode> = {
   drift: spatialDrift,
-  journey: semanticJourney
+  journey: semanticJourney,
+  session: sessionMode
 }
 
 export function isNavMode(mode: PlayMode): mode is NavModeId {
-  return mode === 'drift' || mode === 'journey'
+  return mode === 'drift' || mode === 'journey' || mode === 'session'
 }
 
 /**

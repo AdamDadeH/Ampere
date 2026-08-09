@@ -3,6 +3,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { mkdirSync } from 'fs'
 import { SCHEMA_SQL, SCHEMA_VERSION } from './schema'
+import { sessionize, currentSession, SESSION_GAP_MS } from './sessions'
 import { parseArtists, isBrowsableArtist } from '../scanner/artist-parser'
 import { importSemanticIndex, type SemanticImportReport } from './clap-import'
 
@@ -116,10 +117,10 @@ export class LibraryDatabase {
     addColumnSafe('ALTER TABLE tracks ADD COLUMN source_id TEXT')
     addColumnSafe('ALTER TABLE tracks ADD COLUMN inferred_rating REAL DEFAULT NULL')
 
-    // UMAP coords for the CLAP map — added if track_semantic predates them.
     // Which UI surface a feedback event came from — see schema.ts.
     addColumnSafe('ALTER TABLE track_feedback ADD COLUMN surface TEXT')
 
+    // UMAP coords for the CLAP map — added if track_semantic predates them.
     addColumnSafe('ALTER TABLE track_semantic ADD COLUMN umap_x REAL')
     addColumnSafe('ALTER TABLE track_semantic ADD COLUMN umap_y REAL')
     addColumnSafe('ALTER TABLE track_semantic ADD COLUMN umap_z REAL')
@@ -777,6 +778,25 @@ export class LibraryDatabase {
     return this.db.prepare(
       'SELECT * FROM track_feedback ORDER BY created_at ASC'
     ).all() as FeedbackRow[]
+  }
+
+  /**
+   * Events belonging to the session in progress, or [] if the last one has
+   * gone idle past the gap.
+   *
+   * Sessionizing here rather than in the renderer keeps the whole feedback
+   * table on this side of the IPC boundary — only the live session crosses.
+   * Only the recent tail is scanned; a session cannot span the gap, so older
+   * rows cannot belong to it.
+   */
+  getCurrentSessionFeedback(nowMs: number = Date.now()): FeedbackRow[] {
+    const cutoff = new Date(nowMs - SESSION_GAP_MS * 2).toISOString().replace('T', ' ').slice(0, 19)
+    const recent = this.db.prepare(
+      'SELECT * FROM track_feedback WHERE created_at >= ? ORDER BY created_at ASC'
+    ).all(cutoff) as FeedbackRow[]
+
+    const live = currentSession(sessionize(recent), nowMs)
+    return live ? live.events : []
   }
 
   // --- Inferred rating: learned model with heuristic fallback ---

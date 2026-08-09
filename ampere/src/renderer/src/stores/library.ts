@@ -350,12 +350,23 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     const { playMode } = get()
     if (isNavMode(playMode) && currentTrack) {
       const nav = useNavigationStore.getState()
-      const step = nav.next(playMode, currentTrack.id)
+      // inferred_rating is the global model's output, 0–5; the session scorer
+      // wants [0,1]. Unrated tracks sit at the midpoint rather than at zero,
+      // so "no prediction" doesn't read as "disliked".
+      const ratingById = new Map(get().libraryTracks.map(t => [t.id, t.inferred_rating]))
+      const globalPreference = (trackId: string): number => {
+        const r = ratingById.get(trackId)
+        return r == null ? 0.5 : Math.max(0, Math.min(1, r / 5))
+      }
+      const step = nav.next(playMode, currentTrack.id, globalPreference)
       // Resolve against the full library, not the filtered view.
       const pool = get().libraryTracks.length ? get().libraryTracks : get().tracks
       const stepTrack = step ? pool.find(t => t.id === step.trackId) : undefined
       if (step && stepTrack) {
         get().playTrack(stepTrack, pool, step.source)
+        // The outgoing track's outcome was recorded moments ago; pick it up so
+        // the next step sees it. Async, so signals lag by at most one step.
+        void nav.refreshSession()
         return
       }
       // Falling back to queue order is indistinguishable from the mode simply
@@ -475,6 +486,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     // graph. Both are no-ops if already done.
     if (isNavMode(mode)) {
       void useNavigationStore.getState().ensureLoaded()
+      void useNavigationStore.getState().refreshSession()
       if (currentTrack) useNavigationStore.getState().resetWalk(currentTrack.id)
     }
   },
