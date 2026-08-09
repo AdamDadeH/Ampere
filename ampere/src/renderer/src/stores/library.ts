@@ -567,8 +567,13 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   setDriftNext: (fn) => set({ driftNext: fn }),
 
   getUpcomingTrackIds: (count) => {
-    const { queue, queueIndex, shuffle, shuffledIndices, shufflePosition, driftNext } = get()
+    const { queue, queueIndex, shuffle, shuffledIndices, shufflePosition, driftNext, playMode } = get()
     if (driftNext || queue.length === 0) return []
+    // A graph walk decides its next track at the moment of advancing, so queue
+    // order predicts nothing here. Prefetching from it would warm three tracks
+    // that will not play while missing the one that will. Returning nothing is
+    // honest until the walk precomputes its pick.
+    if (isNavMode(playMode)) return []
 
     const ids: string[] = []
     if (shuffle) {

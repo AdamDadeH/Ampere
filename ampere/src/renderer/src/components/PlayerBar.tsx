@@ -3,6 +3,8 @@ import { useLibraryStore } from '../stores/library'
 import { AlbumArt } from './AlbumArt'
 import { StarRating } from './StarRating'
 import { PlayModeSelector } from './PlayModeSelector'
+import { NavStatus } from './NavStatus'
+import { TrackLoadStatus } from './TrackLoadStatus'
 import { isNavMode } from '../riemann/modes'
 
 function formatDuration(seconds: number): string {
@@ -78,6 +80,8 @@ export function PlayerBar(): React.JSX.Element {
       <div className="flex-1 flex flex-col items-center gap-1">
         <div className="flex items-center gap-3">
           <PlayModeSelector />
+          <TrackLoadStatus />
+          <NavStatus />
           <button
             onClick={toggleShuffle}
             className={`transition-colors cursor-pointer ${shuffle ? 'text-[#ffaa00]' : 'text-text-faint hover:text-text-primary'}`}
