@@ -429,6 +429,32 @@ function setupIPC(): void {
     db.bulkSetUmapCoords(coords)
   })
   ipcMain.handle('get-feature-count', () => db.getFeatureCount())
+
+  // Semantic index (CLAP + RQ-VAE Semantic IDs from the standalone vq pipeline)
+  ipcMain.handle('import-semantic-index', async (_event, vqDbPath?: string) => {
+    let path = vqDbPath
+    if (!path) {
+      if (!mainWindow) return null
+      // Default the picker to the in-repo vq cache; dev runs from ampere/.
+      const defaultPath = join(app.getAppPath(), '..', 'vq', 'cache', 'ampere_index.sqlite')
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: 'Select vq Semantic Index (ampere_index.sqlite)',
+        defaultPath,
+        properties: ['openFile'],
+        filters: [{ name: 'SQLite index', extensions: ['sqlite', 'db'] }]
+      })
+      if (result.canceled || result.filePaths.length === 0) return null
+      path = result.filePaths[0]
+    }
+    return db.importSemanticIndex(path)
+  })
+  ipcMain.handle('get-semantic-count', () => db.getSemanticCount())
+  ipcMain.handle('get-semantic-features', () => db.getSemanticFeatures())
+  ipcMain.handle('get-semantic-features-with-coords', () => db.getSemanticFeaturesWithCoords())
+  ipcMain.handle('bulk-set-semantic-umap-coords', (_event, coords: { trackId: string; x: number; y: number; z: number }[]) => {
+    db.bulkSetSemanticUmapCoords(coords)
+  })
+  ipcMain.handle('get-semantic-code-names', () => db.getSemanticCodeNames())
   ipcMain.handle('read-audio-file', async (_event, filePath: string) => {
     // For Proton Drive files, ensure materialized before reading
     if (isProtonDrivePath(filePath) && !isFileMaterialized(filePath)) {
@@ -518,8 +544,8 @@ function setupIPC(): void {
   })
 
   // Feedback
-  ipcMain.handle('record-feedback', (_event, trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null) => {
-    db.recordFeedback(trackId, eventType, eventValue, attentionWeight, source)
+  ipcMain.handle('record-feedback', (_event, trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null, surface: string | null) => {
+    db.recordFeedback(trackId, eventType, eventValue, attentionWeight, source, surface)
   })
 
   ipcMain.handle('get-track-feedback', (_event, trackId: string) => {

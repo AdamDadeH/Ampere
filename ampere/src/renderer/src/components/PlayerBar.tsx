@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { useLibraryStore } from '../stores/library'
 import { AlbumArt } from './AlbumArt'
 import { StarRating } from './StarRating'
+import { PlayModeSelector } from './PlayModeSelector'
 
 function formatDuration(seconds: number): string {
   const mins = Math.floor(seconds / 60)
@@ -70,10 +71,11 @@ export function PlayerBar(): React.JSX.Element {
       {/* Controls — unified transport + feedback strip */}
       <div className="flex-1 flex flex-col items-center gap-1">
         <div className="flex items-center gap-3">
+          <PlayModeSelector />
           <button
             onClick={toggleShuffle}
             className={`transition-colors cursor-pointer ${shuffle ? 'text-[#ffaa00]' : 'text-text-faint hover:text-text-primary'}`}
-            title="Shuffle"
+            title={shuffle ? 'Shuffle on — click to return to the previous mode' : 'Shuffle (overrides the current mode)'}
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
               <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z" />

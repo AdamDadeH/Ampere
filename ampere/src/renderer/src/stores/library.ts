@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { getAttentionWeight } from './attention'
 import { buildShufflePermutation } from '../utils/shuffle'
+import { isNavMode, PlayMode } from '../riemann/modes'
+import { useNavigationStore } from './navigation'
 
 export interface Track {
   id: string
@@ -70,7 +72,14 @@ type ArtistViewMode = 'track' | 'album'
 
 interface LibraryState {
   // Library data
+  /** The currently displayed list — filtered by search, artist, or album view. */
   tracks: Track[]
+  /**
+   * The whole library, independent of any filter. Nav modes walk a graph over
+   * every track, so resolving a step against the filtered `tracks` would miss
+   * anything outside the current view and silently fall back to queue order.
+   */
+  libraryTracks: Track[]
   artists: ArtistInfo[]
   albumArtists: ArtistInfo[]
   albums: AlbumInfo[]
@@ -78,6 +87,12 @@ interface LibraryState {
 
   // Navigation
   currentView: View
+  /**
+   * UI surface the user last acted from — stamped onto every feedback event.
+   * Usually tracks `currentView`, but the compact window drives playback
+   * remotely from a different renderer, so it sets this explicitly.
+   */
+  activeSurface: string
   artistViewMode: ArtistViewMode
   selectedArtist: string | null
   selectedAlbum: string | null
@@ -92,6 +107,15 @@ interface LibraryState {
   currentTime: number
   duration: number
   seekTarget: number | null
+  /**
+   * The single active play strategy: queue orders ('linear' / 'random') or a
+   * graph-walking nav mode. Replaces the old shuffle-boolean-plus-driftNext
+   * pair, where precedence between the two was implicit.
+   */
+  playMode: PlayMode
+  /** Mode to restore when the random override is switched back off. */
+  modeBeforeRandom: PlayMode
+  /** Mirrors `playMode === 'random'`. Kept so PlayerBar and the compact window need no change. */
   shuffle: boolean
   shuffledIndices: number[]
   shufflePosition: number
@@ -116,6 +140,7 @@ interface LibraryState {
   loadLibrary: () => Promise<void>
   selectFolder: () => Promise<void>
   setView: (view: View) => void
+  setActiveSurface: (surface: string) => void
   setArtistViewMode: (mode: ArtistViewMode) => void
   selectArtist: (artist: string) => void
   selectAlbum: (album: string, artist?: string) => void
@@ -128,6 +153,8 @@ interface LibraryState {
   setCurrentTime: (time: number) => void
   setDuration: (duration: number) => void
   seekTo: (time: number) => void
+  setPlayMode: (mode: PlayMode) => void
+  /** Quick override to random; toggling off returns to the previous mode. */
   toggleShuffle: () => void
   cycleRepeat: () => void
   stopPlayback: () => void
@@ -149,11 +176,13 @@ interface LibraryState {
 
 export const useLibraryStore = create<LibraryState>((set, get) => ({
   tracks: [],
+  libraryTracks: [],
   artists: [],
   albumArtists: [],
   albums: [],
   stats: null,
   currentView: 'all-tracks',
+  activeSurface: 'all-tracks',
   artistViewMode: 'album',
   selectedArtist: null,
   selectedAlbum: null,
@@ -166,6 +195,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   currentTime: 0,
   duration: 0,
   seekTarget: null,
+  playMode: 'linear',
+  modeBeforeRandom: 'linear',
   shuffle: false,
   shuffledIndices: [],
   shufflePosition: -1,
@@ -186,7 +217,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       window.api.getAlbums() as Promise<AlbumInfo[]>,
       window.api.getLibraryStats() as Promise<LibraryStats>
     ])
-    set({ tracks, artists, albumArtists, albums, stats })
+    set({ tracks, libraryTracks: tracks, artists, albumArtists, albums, stats })
   },
 
   selectFolder: async () => {
@@ -194,15 +225,17 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     await window.api.selectFolder()
   },
 
+  setActiveSurface: (surface) => set({ activeSurface: surface }),
+
   setView: (view) => {
-    set({ currentView: view, selectedArtist: null, selectedAlbum: null })
+    set({ currentView: view, activeSurface: view, selectedArtist: null, selectedAlbum: null })
     if (view === 'all-tracks') {
       get().loadLibrary()
     }
   },
 
   setArtistViewMode: (mode) => {
-    set({ artistViewMode: mode, selectedArtist: null, currentView: 'all-tracks' })
+    set({ artistViewMode: mode, selectedArtist: null, currentView: 'all-tracks', activeSurface: 'all-tracks' })
   },
 
   selectArtist: async (artist) => {
@@ -218,6 +251,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }
     set({
       currentView: 'artist-detail',
+      activeSurface: 'artist-detail',
       selectedArtist: artist,
       selectedAlbum: null,
       tracks,
@@ -229,6 +263,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     const tracks = await window.api.getTracks({ album, artist }) as Track[]
     set({
       currentView: 'album-detail',
+      activeSurface: 'album-detail',
       selectedAlbum: album,
       tracks
     })
@@ -305,10 +340,32 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       }
     }
 
+    // Escape hatch for custom navigation registered from outside the registry.
     if (driftNext) {
       driftNext()
       return
     }
+
+    // Graph-walking modes choose from the nav registry rather than the queue.
+    const { playMode } = get()
+    if (isNavMode(playMode) && currentTrack) {
+      const nav = useNavigationStore.getState()
+      const step = nav.next(playMode, currentTrack.id)
+      // Resolve against the full library, not the filtered view.
+      const pool = get().libraryTracks.length ? get().libraryTracks : get().tracks
+      const stepTrack = step ? pool.find(t => t.id === step.trackId) : undefined
+      if (step && stepTrack) {
+        get().playTrack(stepTrack, pool, step.source)
+        return
+      }
+      // Falling back to queue order is indistinguishable from the mode simply
+      // working, so say why — otherwise a broken walk looks like linear play.
+      console.warn(
+        `[nav] ${playMode} could not step from ${currentTrack.id}; falling back to queue order.`,
+        step ? 'Chosen track is not in the library list.' : nav.data ? 'No candidate from the graph.' : 'Graph not loaded yet.'
+      )
+    }
+
     if (queue.length === 0) return
 
     let nextQueueIndex: number
@@ -399,19 +456,38 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     set({ seekTarget: time })
   },
 
+  setPlayMode: (mode) => {
+    const { queue, queueIndex, currentTrack } = get()
+
+    if (mode === 'random') {
+      // Generate the permutation with the current track at position 0.
+      const perm = queue.length > 0
+        ? buildShufflePermutation(queue.length, queueIndex, queue.map(t => t.id))
+        : []
+      set({ playMode: 'random', shuffle: true, shuffledIndices: perm, shufflePosition: perm.length ? 0 : -1 })
+      return
+    }
+
+    // Leaving random — the permutation is meaningless to the other modes.
+    set({ playMode: mode, shuffle: false, shuffledIndices: [], shufflePosition: -1 })
+
+    // A graph walk starts from wherever playback currently is, and needs its
+    // graph. Both are no-ops if already done.
+    if (isNavMode(mode)) {
+      void useNavigationStore.getState().ensureLoaded()
+      if (currentTrack) useNavigationStore.getState().resetWalk(currentTrack.id)
+    }
+  },
+
   toggleShuffle: () => {
-    const { shuffle, queue, queueIndex } = get()
-    if (!shuffle) {
-      // Turning ON — generate permutation with current track at position 0
-      if (queue.length > 0) {
-        const perm = buildShufflePermutation(queue.length, queueIndex, queue.map(t => t.id))
-        set({ shuffle: true, shuffledIndices: perm, shufflePosition: 0 })
-      } else {
-        set({ shuffle: true, shuffledIndices: [], shufflePosition: -1 })
-      }
+    const { playMode, modeBeforeRandom } = get()
+    if (playMode === 'random') {
+      // Return to whatever was running before, rather than resetting to linear —
+      // random is an override, not a destination.
+      get().setPlayMode(modeBeforeRandom)
     } else {
-      // Turning OFF — clear permutation
-      set({ shuffle: false, shuffledIndices: [], shufflePosition: -1 })
+      set({ modeBeforeRandom: playMode })
+      get().setPlayMode('random')
     }
   },
 
@@ -522,7 +598,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 
   recordFeedback: (trackId, eventType, eventValue, source) => {
     const weight = getAttentionWeight()
-    window.api.recordFeedback(trackId, eventType, eventValue, weight, source).catch(console.error)
+    const { activeSurface } = get()
+    window.api.recordFeedback(trackId, eventType, eventValue, weight, source, activeSurface).catch(console.error)
   },
 
   lovingThis: () => {

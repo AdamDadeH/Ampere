@@ -278,6 +278,9 @@ export function AudioEngine(): React.JSX.Element {
   useEffect(() => {
     const unsubscribe = window.api.onPlayerCommand((command: string, ...args: unknown[]) => {
       const store = useLibraryStore.getState()
+      // The command came from the compact window, so that is the surface the
+      // user acted from — not whatever view this renderer happens to show.
+      store.setActiveSurface('compact')
       switch (command) {
         case 'toggle-play-pause':
           store.togglePlayPause()

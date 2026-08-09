@@ -23,12 +23,14 @@ function formatBytes(bytes: number): string {
 export function SettingsView(): React.JSX.Element {
   const [stats, setStats] = useState<CacheStats | null>(null)
   const [limitGb, setLimitGb] = useState('')
-  const [busy, setBusy] = useState<null | 'apply' | 'evict'>(null)
+  const [busy, setBusy] = useState<null | 'apply' | 'evict' | 'import'>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [semanticCount, setSemanticCount] = useState<number | null>(null)
 
   const refresh = useCallback(async () => {
     const s = (await window.api.getCacheStats()) as CacheStats
     setStats(s)
+    setSemanticCount(await window.api.getSemanticCount())
     // Only seed the input when it's empty so we don't clobber what the user is typing.
     setLimitGb(prev => (prev === '' ? (s.maxSizeBytes / GB).toFixed(1) : prev))
   }, [])
@@ -67,6 +69,28 @@ export function SettingsView(): React.JSX.Element {
           ? `Evicted ${evicted} file${evicted === 1 ? '' : 's'}, freed ${formatBytes(freedBytes)}.`
           : 'Nothing to evict — cache is under budget.'
       )
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const importSemantic = async (): Promise<void> => {
+    setBusy('import')
+    setMessage(null)
+    try {
+      const report = await window.api.importSemanticIndex()
+      if (!report) {
+        setMessage('Import cancelled.')
+        return
+      }
+      await refresh()
+      const unmatched = report.unmatchedInVq > 0 ? `, ${report.unmatchedInVq} not in library` : ''
+      setMessage(
+        `Imported ${report.matched.toLocaleString()} of ${report.vqTracks.toLocaleString()} embeddings ` +
+          `(${report.numLevels}×${report.codebookSize} Semantic IDs, dim ${report.embeddingDim})${unmatched}.`
+      )
+    } catch (err) {
+      setMessage(`Import failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setBusy(null)
     }
@@ -144,6 +168,31 @@ export function SettingsView(): React.JSX.Element {
             >
               {busy === 'apply' ? 'Applying…' : 'Apply'}
             </button>
+          </div>
+        </section>
+
+        <section className="mb-8">
+          <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Semantic index</h2>
+          <p className="text-sm text-text-muted mb-3">
+            CLAP audio embeddings + RQ-VAE Semantic IDs from the standalone <span className="font-mono text-text-secondary">vq</span> pipeline.
+            Run <span className="font-mono text-text-secondary">vq/scripts/export_ampere.py</span> first, then import the generated
+            <span className="font-mono text-text-secondary"> ampere_index.sqlite</span>. Purely audio-derived — safe to rebuild anytime.
+          </p>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={importSemantic}
+              disabled={busy !== null}
+              className="px-4 py-2 bg-bg-tertiary hover:bg-bg-hover text-text-secondary rounded text-sm transition-colors cursor-pointer disabled:opacity-50"
+            >
+              {busy === 'import' ? 'Importing…' : 'Import semantic index…'}
+            </button>
+            <span className="text-sm text-text-muted">
+              {semanticCount === null
+                ? '—'
+                : semanticCount > 0
+                  ? `${semanticCount.toLocaleString()} tracks indexed`
+                  : 'Not yet imported'}
+            </span>
           </div>
         </section>
 

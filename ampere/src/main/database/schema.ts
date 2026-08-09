@@ -93,6 +93,39 @@ CREATE TABLE IF NOT EXISTS track_features (
   FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
 );
 
+-- Derived audio-feature table from the standalone vq pipeline (CLAP embeddings
+-- + RQ-VAE Semantic IDs). Purely audio-derived and fully recomputable by
+-- re-running vq's export + the importer — never load-bearing, never user data.
+-- clap = raw little-endian float32 bytes (embedding_dim recorded in semantic_meta).
+CREATE TABLE IF NOT EXISTS track_semantic (
+  track_id    TEXT PRIMARY KEY,
+  clap        BLOB NOT NULL,
+  sid_0       INTEGER NOT NULL,
+  sid_1       INTEGER NOT NULL,
+  sid_2       INTEGER NOT NULL,
+  umap_x      REAL,
+  umap_y      REAL,
+  umap_z      REAL,
+  computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_track_semantic_sid ON track_semantic(sid_0, sid_1, sid_2);
+
+-- Human-readable labels for each (level, code), imported from vq's code_names.
+CREATE TABLE IF NOT EXISTS semantic_code_names (
+  level INTEGER NOT NULL,
+  code  INTEGER NOT NULL,
+  name  TEXT NOT NULL,
+  alts  TEXT NOT NULL,
+  PRIMARY KEY (level, code)
+);
+
+-- Provenance/config for the semantic index (embedding_dim, num_levels, etc.).
+CREATE TABLE IF NOT EXISTS semantic_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS storage_sources (
   id TEXT PRIMARY KEY,
   type TEXT NOT NULL,
@@ -109,6 +142,11 @@ CREATE TABLE IF NOT EXISTS track_feedback (
   event_value REAL,
   attention_weight REAL NOT NULL DEFAULT 1.0,
   source TEXT,
+  -- UI surface the play decision was made from (main list, riemann, compact...).
+  -- Not derivable after the fact: nav modes like drift used to imply the 3D
+  -- view, but once a mode runs on more than one surface that inference breaks.
+  -- Needed to compare navigation modes without confounding them with context.
+  surface TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
 );

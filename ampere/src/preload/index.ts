@@ -71,6 +71,21 @@ export interface ElectronAPI {
   getTrackFeaturesWithCoords(): Promise<{ track_id: string; features_json: string; umap_x: number; umap_y: number; umap_z: number }[]>
   bulkSetUmapCoords(coords: { trackId: string; x: number; y: number; z: number }[]): Promise<void>
   getFeatureCount(): Promise<number>
+  // Semantic index (CLAP + RQ-VAE Semantic IDs from vq)
+  importSemanticIndex(vqDbPath?: string): Promise<{
+    vqTracks: number
+    matched: number
+    unmatchedInVq: number
+    codeNames: number
+    embeddingDim: number | null
+    numLevels: number | null
+    codebookSize: number | null
+  } | null>
+  getSemanticCount(): Promise<number>
+  getSemanticFeatures(): Promise<{ track_id: string; features_json: string; sid_0: number; sid_1: number; sid_2: number }[]>
+  getSemanticFeaturesWithCoords(): Promise<{ track_id: string; features_json: string; umap_x: number; umap_y: number; umap_z: number; sid_0: number; sid_1: number; sid_2: number }[]>
+  bulkSetSemanticUmapCoords(coords: { trackId: string; x: number; y: number; z: number }[]): Promise<void>
+  getSemanticCodeNames(): Promise<{ level: number; code: number; name: string; alts: string }[]>
   readAudioFile(filePath: string): Promise<ArrayBuffer>
   // Cloud-first: downloads + prefetch
   prefetchTracks(trackIds: string[]): Promise<Record<string, string>>
@@ -89,8 +104,8 @@ export interface ElectronAPI {
   unpinTrack(trackId: string): Promise<void>
   evictCache(): Promise<{ evicted: number; freedBytes: number }>
   // Feedback
-  recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null): Promise<void>
-  getTrackFeedback(trackId: string): Promise<{ id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; created_at: string }[]>
+  recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null, surface: string | null): Promise<void>
+  getTrackFeedback(trackId: string): Promise<{ id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; surface: string | null; created_at: string }[]>
   recomputeInferredRatings(): Promise<void>
   onInferredRatingsUpdated(callback: (ratings: { id: string; inferred_rating: number }[]) => void): () => void
 }
@@ -149,6 +164,12 @@ const api: ElectronAPI = {
   getTrackFeaturesWithCoords: () => ipcRenderer.invoke('get-track-features-with-coords'),
   bulkSetUmapCoords: (coords) => ipcRenderer.invoke('bulk-set-umap-coords', coords),
   getFeatureCount: () => ipcRenderer.invoke('get-feature-count'),
+  importSemanticIndex: (vqDbPath?: string) => ipcRenderer.invoke('import-semantic-index', vqDbPath),
+  getSemanticCount: () => ipcRenderer.invoke('get-semantic-count'),
+  getSemanticFeatures: () => ipcRenderer.invoke('get-semantic-features'),
+  getSemanticFeaturesWithCoords: () => ipcRenderer.invoke('get-semantic-features-with-coords'),
+  bulkSetSemanticUmapCoords: (coords) => ipcRenderer.invoke('bulk-set-semantic-umap-coords', coords),
+  getSemanticCodeNames: () => ipcRenderer.invoke('get-semantic-code-names'),
   readAudioFile: (filePath) => ipcRenderer.invoke('read-audio-file', filePath),
   // Cloud-first: downloads + prefetch
   prefetchTracks: (trackIds) => ipcRenderer.invoke('prefetch-tracks', trackIds),
@@ -175,8 +196,8 @@ const api: ElectronAPI = {
   unpinTrack: (trackId) => ipcRenderer.invoke('unpin-track', trackId),
   evictCache: () => ipcRenderer.invoke('evict-cache'),
   // Feedback
-  recordFeedback: (trackId, eventType, eventValue, attentionWeight, source) =>
-    ipcRenderer.invoke('record-feedback', trackId, eventType, eventValue, attentionWeight, source),
+  recordFeedback: (trackId, eventType, eventValue, attentionWeight, source, surface) =>
+    ipcRenderer.invoke('record-feedback', trackId, eventType, eventValue, attentionWeight, source, surface),
   getTrackFeedback: (trackId) => ipcRenderer.invoke('get-track-feedback', trackId),
   recomputeInferredRatings: () => ipcRenderer.invoke('recompute-inferred-ratings'),
   onInferredRatingsUpdated: (callback) => {

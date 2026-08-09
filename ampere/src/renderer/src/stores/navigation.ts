@@ -1,0 +1,98 @@
+/**
+ * Navigation state for the graph-walking play modes.
+ *
+ * Lives outside the library store because it is a separate concern, and
+ * outside RiemannNavigator because modes must keep working when the 3D view
+ * is not mounted — that is the whole point of extracting them.
+ *
+ * The 3D view already builds this graph for its scene, so it hands the result
+ * over via `adoptData` instead of making the app load and project it twice.
+ */
+import { create } from 'zustand'
+import { FeatureSource, NavData, loadNavData } from '../riemann/nav-data'
+import { createDriftState, DriftState, NavModeId, NavStep, selectNext } from '../riemann/modes'
+
+interface NavigationState {
+  data: NavData | null
+  isLoading: boolean
+  source: FeatureSource
+  driftState: DriftState | null
+  /** Journey coherence, 0–1. Higher keeps steps closer to the current track. */
+  coherence: number
+  /** Semantic tier of the last journey step, for display. */
+  lastTier: string | null
+
+  /** Load the graph if it isn't loaded already. Safe to call repeatedly. */
+  ensureLoaded: () => Promise<void>
+  /** Take a graph the 3D view has already built. */
+  adoptData: (data: NavData, source: FeatureSource) => void
+  setSource: (source: FeatureSource) => Promise<void>
+  setCoherence: (coherence: number) => void
+  /** Begin a fresh walk from a track, discarding visit history. */
+  resetWalk: (trackId: string) => void
+  /** Record that a track was played, so a walk won't revisit it. */
+  markVisited: (trackId: string) => void
+  /** Ask the active mode for the next track. Null when it cannot move. */
+  next: (mode: NavModeId, currentTrackId: string) => NavStep | null
+}
+
+export const useNavigationStore = create<NavigationState>((set, get) => ({
+  data: null,
+  isLoading: false,
+  source: 'clap',
+  driftState: null,
+  coherence: 0.7,
+  lastTier: null,
+
+  ensureLoaded: async () => {
+    const { data, isLoading, source } = get()
+    if (data || isLoading) return
+    set({ isLoading: true })
+    try {
+      const loaded = await loadNavData(source)
+      set({ data: loaded, isLoading: false })
+    } catch (err) {
+      console.error('Failed to load navigation data', err)
+      set({ isLoading: false })
+    }
+  },
+
+  adoptData: (data, source) => set({ data, source }),
+
+  setSource: async (source) => {
+    set({ source, data: null, driftState: null, lastTier: null, isLoading: true })
+    try {
+      const loaded = await loadNavData(source)
+      set({ data: loaded, isLoading: false })
+    } catch (err) {
+      console.error('Failed to load navigation data', err)
+      set({ isLoading: false })
+    }
+  },
+
+  setCoherence: (coherence) => set({ coherence }),
+
+  resetWalk: (trackId) => set({ driftState: createDriftState(trackId), lastTier: null }),
+
+  markVisited: (trackId) => {
+    const { driftState } = get()
+    if (!driftState) return
+    driftState.visited.add(trackId)
+    driftState.trajectory.push(trackId)
+  },
+
+  next: (mode, currentTrackId) => {
+    const { data, coherence } = get()
+    if (!data) return null
+
+    let { driftState } = get()
+    if (!driftState) {
+      driftState = createDriftState(currentTrackId)
+      set({ driftState })
+    }
+
+    const step = selectNext(mode, { data, state: driftState, currentTrackId, coherence })
+    set({ lastTier: step?.tier ?? null })
+    return step
+  }
+}))

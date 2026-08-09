@@ -4,6 +4,7 @@ import { join } from 'path'
 import { mkdirSync } from 'fs'
 import { SCHEMA_SQL, SCHEMA_VERSION } from './schema'
 import { parseArtists, isBrowsableArtist } from '../scanner/artist-parser'
+import { importSemanticIndex, type SemanticImportReport } from './clap-import'
 
 export interface Track {
   id: string
@@ -60,6 +61,18 @@ export interface LibraryStats {
   total_duration: number
 }
 
+/** A row of `track_feedback`. `surface` is null for events logged before it existed. */
+export interface FeedbackRow {
+  id: number
+  track_id: string
+  event_type: string
+  event_value: number | null
+  attention_weight: number
+  source: string | null
+  surface: string | null
+  created_at: string
+}
+
 export type TrackUpsertData = Omit<Track, 'play_count' | 'last_played' | 'rating' | 'date_added' | 'date_modified' | 'last_accessed' | 'pinned'>
 
 export class LibraryDatabase {
@@ -102,6 +115,14 @@ export class LibraryDatabase {
     addColumnSafe('ALTER TABLE tracks ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
     addColumnSafe('ALTER TABLE tracks ADD COLUMN source_id TEXT')
     addColumnSafe('ALTER TABLE tracks ADD COLUMN inferred_rating REAL DEFAULT NULL')
+
+    // UMAP coords for the CLAP map — added if track_semantic predates them.
+    // Which UI surface a feedback event came from — see schema.ts.
+    addColumnSafe('ALTER TABLE track_feedback ADD COLUMN surface TEXT')
+
+    addColumnSafe('ALTER TABLE track_semantic ADD COLUMN umap_x REAL')
+    addColumnSafe('ALTER TABLE track_semantic ADD COLUMN umap_y REAL')
+    addColumnSafe('ALTER TABLE track_semantic ADD COLUMN umap_z REAL')
   }
 
   private refreshDerivedTables(): void {
@@ -530,6 +551,95 @@ export class LibraryDatabase {
     return row.count
   }
 
+  // --- Semantic index (CLAP embeddings + RQ-VAE Semantic IDs from vq) ---
+
+  /** Import the standalone vq index, joining by file_path. Derived data only. */
+  importSemanticIndex(vqDbPath: string): SemanticImportReport {
+    return importSemanticIndex(this.db, vqDbPath)
+  }
+
+  getSemanticCount(): number {
+    const row = this.db.prepare('SELECT COUNT(*) as count FROM track_semantic').get() as { count: number }
+    return row.count
+  }
+
+  /**
+   * CLAP feature vectors for every track that has one, decoded from the raw
+   * float32 BLOB into a JSON array — same shape `projectToUMAP` consumes for the
+   * Meyda vectors, so the navigator can project from either source.
+   */
+  getSemanticFeatures(): { track_id: string; features_json: string; sid_0: number; sid_1: number; sid_2: number }[] {
+    const rows = this.db.prepare(
+      'SELECT track_id, clap, sid_0, sid_1, sid_2 FROM track_semantic'
+    ).all() as { track_id: string; clap: Buffer; sid_0: number; sid_1: number; sid_2: number }[]
+    return rows.map((r) => {
+      const f = new Float32Array(r.clap.buffer, r.clap.byteOffset, r.clap.byteLength / 4)
+      return {
+        track_id: r.track_id,
+        features_json: JSON.stringify(Array.from(f)),
+        sid_0: r.sid_0,
+        sid_1: r.sid_1,
+        sid_2: r.sid_2
+      }
+    })
+  }
+
+  getSemanticCodeNames(): { level: number; code: number; name: string; alts: string }[] {
+    return this.db.prepare(
+      'SELECT level, code, name, alts FROM semantic_code_names ORDER BY level, code'
+    ).all() as { level: number; code: number; name: string; alts: string }[]
+  }
+
+  bulkSetSemanticUmapCoords(coords: { trackId: string; x: number; y: number; z: number }[]): void {
+    const stmt = this.db.prepare(
+      'UPDATE track_semantic SET umap_x = ?, umap_y = ?, umap_z = ? WHERE track_id = ?'
+    )
+    const transaction = this.db.transaction((items: typeof coords) => {
+      for (const { trackId, x, y, z } of items) {
+        stmt.run(x, y, z, trackId)
+      }
+    })
+    transaction(coords)
+  }
+
+  /** CLAP map nodes that already have UMAP coords, plus their Semantic IDs. */
+  getSemanticFeaturesWithCoords(): {
+    track_id: string
+    features_json: string
+    umap_x: number
+    umap_y: number
+    umap_z: number
+    sid_0: number
+    sid_1: number
+    sid_2: number
+  }[] {
+    const rows = this.db.prepare(
+      'SELECT track_id, clap, umap_x, umap_y, umap_z, sid_0, sid_1, sid_2 FROM track_semantic WHERE umap_x IS NOT NULL'
+    ).all() as {
+      track_id: string
+      clap: Buffer
+      umap_x: number
+      umap_y: number
+      umap_z: number
+      sid_0: number
+      sid_1: number
+      sid_2: number
+    }[]
+    return rows.map((r) => {
+      const f = new Float32Array(r.clap.buffer, r.clap.byteOffset, r.clap.byteLength / 4)
+      return {
+        track_id: r.track_id,
+        features_json: JSON.stringify(Array.from(f)),
+        umap_x: r.umap_x,
+        umap_y: r.umap_y,
+        umap_z: r.umap_z,
+        sid_0: r.sid_0,
+        sid_1: r.sid_1,
+        sid_2: r.sid_2
+      }
+    })
+  }
+
   // --- Storage Sources ---
 
   addStorageSource(source: { id: string; type: string; root_path: string; label?: string; proton_email?: string }): void {
@@ -650,16 +760,23 @@ export class LibraryDatabase {
 
   // --- Feedback ---
 
-  recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null): void {
+  recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null, surface: string | null = null): void {
     this.db.prepare(
-      'INSERT INTO track_feedback (track_id, event_type, event_value, attention_weight, source) VALUES (?, ?, ?, ?, ?)'
-    ).run(trackId, eventType, eventValue, attentionWeight, source)
+      'INSERT INTO track_feedback (track_id, event_type, event_value, attention_weight, source, surface) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(trackId, eventType, eventValue, attentionWeight, source, surface)
   }
 
-  getTrackFeedback(trackId: string): { id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; created_at: string }[] {
+  getTrackFeedback(trackId: string): FeedbackRow[] {
     return this.db.prepare(
       'SELECT * FROM track_feedback WHERE track_id = ? ORDER BY created_at DESC'
-    ).all(trackId) as { id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; created_at: string }[]
+    ).all(trackId) as FeedbackRow[]
+  }
+
+  /** Every feedback event, oldest first — the input to session derivation. */
+  getAllFeedback(): FeedbackRow[] {
+    return this.db.prepare(
+      'SELECT * FROM track_feedback ORDER BY created_at ASC'
+    ).all() as FeedbackRow[]
   }
 
   // --- Inferred rating: learned model with heuristic fallback ---
@@ -671,6 +788,13 @@ export class LibraryDatabase {
   ] as const
 
   private static readonly MIN_TRAINING_SAMPLES = 15
+
+  // Ridge penalty for the rating model. Selected by 5-fold CV grouped by
+  // album_artist (grouping matters — random folds let the model memorize an
+  // album's timbre) over 265 rated tracks. R^2 0.21 at lambda=1, 0.28 at 30,
+  // 0.26 at 100 — a broad optimum, so this is not finely tuned to the current
+  // library. Re-check if the feature vector changes shape.
+  private static readonly RIDGE_LAMBDA = 30
 
   /**
    * Build feature vectors for all tracks that have audio features OR feedback.
@@ -807,7 +931,7 @@ export class LibraryDatabase {
       return normed
     })
 
-    const weights = this.solveRidge(Xnorm, y, 1.0)
+    const weights = this.solveRidge(Xnorm, y, LibraryDatabase.RIDGE_LAMBDA)
     if (!weights) return null
 
     return { weights, means, stds, trainingSize: X.length }
