@@ -145,7 +145,7 @@ interface LibraryState {
   selectArtist: (artist: string) => void
   selectAlbum: (album: string, artist?: string) => void
   setSearchQuery: (query: string) => void
-  playTrack: (track: Track, trackList?: Track[], source?: string) => void
+  playTrack: (track: Track, trackList?: Track[], source?: string, context?: Record<string, unknown> | null) => void
   togglePlayPause: () => void
   nextTrack: (reason?: 'auto_advance' | 'manual_skip' | 'not_feeling_it' | 'like_not_now') => void
   prevTrack: () => void
@@ -167,7 +167,7 @@ interface LibraryState {
   setDriftNext: (fn: (() => void) | null) => void
   getUpcomingTrackIds: (count: number) => string[]
   togglePin: (trackId: string) => Promise<void>
-  recordFeedback: (trackId: string, eventType: string, eventValue: number | null, source: string | null) => void
+  recordFeedback: (trackId: string, eventType: string, eventValue: number | null, source: string | null, context?: Record<string, unknown> | null) => void
   lovingThis: () => void
   likeNotNow: () => void
   notFeelingIt: () => void
@@ -279,7 +279,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }
   },
 
-  playTrack: (track, trackList, source) => {
+  playTrack: (track, trackList, source, context) => {
     const list = trackList || get().tracks
     const index = list.findIndex(t => t.id === track.id)
     const seqIndex = index >= 0 ? index : 0
@@ -319,7 +319,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         queueIndex: seqIndex
       })
     }
-    get().recordFeedback(track.id, 'track_started', null, source || 'intentional_select')
+    get().recordFeedback(track.id, 'track_started', null, source || 'intentional_select', context)
   },
 
   togglePlayPause: () => {
@@ -377,7 +377,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       const pool = get().libraryTracks.length ? get().libraryTracks : get().tracks
       const stepTrack = step ? pool.find(t => t.id === step.trackId) : undefined
       if (step && stepTrack) {
-        get().playTrack(stepTrack, pool, step.source)
+        get().playTrack(stepTrack, pool, step.source, step.context)
         // The outgoing track's outcome was recorded moments ago; pick it up so
         // the next step sees it. Async, so signals lag by at most one step.
         void nav.refreshSession()
@@ -627,10 +627,13 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }))
   },
 
-  recordFeedback: (trackId, eventType, eventValue, source) => {
+  recordFeedback: (trackId, eventType, eventValue, source, context) => {
     const weight = getAttentionWeight()
     const { activeSurface } = get()
-    window.api.recordFeedback(trackId, eventType, eventValue, weight, source, activeSurface).catch(console.error)
+    const contextJson = context ? JSON.stringify(context) : null
+    window.api
+      .recordFeedback(trackId, eventType, eventValue, weight, source, activeSurface, contextJson)
+      .catch(console.error)
   },
 
   lovingThis: () => {

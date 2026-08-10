@@ -544,8 +544,8 @@ function setupIPC(): void {
   })
 
   // Feedback
-  ipcMain.handle('record-feedback', (_event, trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null, surface: string | null) => {
-    db.recordFeedback(trackId, eventType, eventValue, attentionWeight, source, surface)
+  ipcMain.handle('record-feedback', (_event, trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null, surface: string | null, contextJson: string | null) => {
+    db.recordFeedback(trackId, eventType, eventValue, attentionWeight, source, surface, contextJson)
   })
 
   ipcMain.handle('get-current-session-feedback', () => db.getCurrentSessionFeedback())

@@ -75,6 +75,8 @@ export interface FeedbackRow {
   attention_weight: number
   source: string | null
   surface: string | null
+  /** Feature values the policy used at decision time, as JSON. Null for plays it did not choose. */
+  context_json: string | null
   created_at: string
 }
 
@@ -123,6 +125,7 @@ export class LibraryDatabase {
 
     // Which UI surface a feedback event came from — see schema.ts.
     addColumnSafe('ALTER TABLE track_feedback ADD COLUMN surface TEXT')
+    addColumnSafe('ALTER TABLE track_feedback ADD COLUMN context_json TEXT')
 
     // UMAP coords for the CLAP map — added if track_semantic predates them.
     addColumnSafe('ALTER TABLE track_semantic ADD COLUMN umap_x REAL')
@@ -781,10 +784,14 @@ export class LibraryDatabase {
 
   // --- Feedback ---
 
-  recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null, surface: string | null = null): void {
+  recordFeedback(
+    trackId: string, eventType: string, eventValue: number | null,
+    attentionWeight: number, source: string | null,
+    surface: string | null = null, contextJson: string | null = null
+  ): void {
     this.db.prepare(
-      'INSERT INTO track_feedback (track_id, event_type, event_value, attention_weight, source, surface) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(trackId, eventType, eventValue, attentionWeight, source, surface)
+      'INSERT INTO track_feedback (track_id, event_type, event_value, attention_weight, source, surface, context_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(trackId, eventType, eventValue, attentionWeight, source, surface, contextJson)
   }
 
   getTrackFeedback(trackId: string): FeedbackRow[] {

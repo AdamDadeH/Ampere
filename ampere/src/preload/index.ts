@@ -113,7 +113,7 @@ export interface ElectronAPI {
   unpinTrack(trackId: string): Promise<void>
   evictCache(): Promise<{ evicted: number; freedBytes: number }>
   // Feedback
-  recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null, surface: string | null): Promise<void>
+  recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null, surface: string | null, contextJson: string | null): Promise<void>
   getTrackFeedback(trackId: string): Promise<{ id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; surface: string | null; created_at: string }[]>
   getCurrentSessionFeedback(): Promise<{ track_id: string; event_type: string; event_value: number | null; surface: string | null; created_at: string }[]>
   getNavReport(opts?: { surface?: string; sustainedThreshold?: number; rejectedThreshold?: number; samplingGapSeconds?: number }): Promise<{
@@ -216,8 +216,8 @@ const api: ElectronAPI = {
   unpinTrack: (trackId) => ipcRenderer.invoke('unpin-track', trackId),
   evictCache: () => ipcRenderer.invoke('evict-cache'),
   // Feedback
-  recordFeedback: (trackId, eventType, eventValue, attentionWeight, source, surface) =>
-    ipcRenderer.invoke('record-feedback', trackId, eventType, eventValue, attentionWeight, source, surface),
+  recordFeedback: (trackId, eventType, eventValue, attentionWeight, source, surface, contextJson) =>
+    ipcRenderer.invoke('record-feedback', trackId, eventType, eventValue, attentionWeight, source, surface, contextJson),
   getTrackFeedback: (trackId) => ipcRenderer.invoke('get-track-feedback', trackId),
   getCurrentSessionFeedback: () => ipcRenderer.invoke('get-current-session-feedback'),
   getNavReport: (opts?) => ipcRenderer.invoke('get-nav-report', opts),

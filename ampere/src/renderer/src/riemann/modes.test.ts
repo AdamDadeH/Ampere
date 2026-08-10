@@ -49,7 +49,10 @@ describe('drift mode', () => {
 
   it('steps to the nearest track in embedding space and tags provenance', () => {
     const step = selectNext('drift', { data, state: createDriftState('a'), currentTrackId: 'a', coherence: 0.7 })
-    expect(step).toEqual({ trackId: 'b', source: 'drift', tier: null })
+    expect(step).toMatchObject({ trackId: 'b', source: 'drift', tier: null })
+    // The decision context rides along so training rows record what the
+    // policy saw, rather than depending on reconstruction later.
+    expect(step?.context).toMatchObject({ mode: 'drift', poolSize: vecs.size })
   })
 
   it('prefers unheard tracks as the walk proceeds', () => {
@@ -209,6 +212,18 @@ describe('session mode', () => {
   it('records signal count and blend weight in the source', () => {
     const step = selectNext('session', ctx(createDriftState('a')))
     expect(step?.source).toMatch(/^session:0:0\.00$/)
+  })
+
+  it('logs the feature values behind the choice', () => {
+    // These are the training rows for a learned scorer; reconstructing them
+    // later would depend on every definition staying still.
+    const step = selectNext('session', ctx(createDriftState('a')))
+    expect(step?.context).toMatchObject({
+      mode: 'session', beta: 0, signals: 0, poolSize: vecs.size
+    })
+    expect(typeof step?.context?.score).toBe('number')
+    expect(typeof step?.context?.affinity).toBe('number')
+    expect(typeof step?.context?.freshness).toBe('number')
   })
 
   it('is unavailable without session context', () => {

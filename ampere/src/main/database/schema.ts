@@ -147,6 +147,12 @@ CREATE TABLE IF NOT EXISTS track_feedback (
   -- view, but once a mode runs on more than one surface that inference breaks.
   -- Needed to compare navigation modes without confounding them with context.
   surface TEXT,
+  -- Feature values the policy actually used when it chose this track, as JSON.
+  -- Recorded rather than reconstructed: once a feature drives selection, any
+  -- later reconstruction has to reproduce exactly what the scorer saw, and it
+  -- silently stops matching the moment a definition changes. Free-form because
+  -- the feature set is expected to keep moving.
+  context_json TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
 );

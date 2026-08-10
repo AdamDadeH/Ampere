@@ -31,6 +31,14 @@ export interface NavStep {
   source: string
   /** Semantic tier the journey stepped along; null for spatial drift. */
   tier: string | null
+  /**
+   * Feature values behind this choice, recorded on the resulting play.
+   *
+   * Logged rather than reconstructed later: once these drive selection, any
+   * reconstruction has to reproduce exactly what the scorer saw, and stops
+   * matching silently the moment a definition moves.
+   */
+  context?: Record<string, number | string | null>
 }
 
 export interface NavContext {
@@ -71,7 +79,13 @@ const spatialDrift: NavMode = {
   isAvailable: (data) => data.unitVectors.size > 0,
   next: ({ data, state, currentTrackId }) => {
     const trackId = embeddingDriftNext(state, data.unitVectors, currentTrackId)
-    return trackId ? { trackId, source: 'drift', tier: null } : null
+    if (!trackId) return null
+    return {
+      trackId,
+      source: 'drift',
+      tier: null,
+      context: { mode: 'drift', poolSize: data.unitVectors.size, visited: state.visited.size }
+    }
   }
 }
 
@@ -93,7 +107,8 @@ const semanticJourney: NavMode = {
     return {
       trackId: step.trackId,
       source: `journey:${step.tier}:${coherence.toFixed(2)}`,
-      tier: step.tier
+      tier: step.tier,
+      context: { mode: 'journey', tier: step.tier, coherence, visited: state.visited.size }
     }
   }
 }
@@ -131,7 +146,19 @@ const sessionMode: NavMode = {
     return {
       trackId: best.trackId,
       source: `session:${session.signals.length}:${beta.toFixed(2)}`,
-      tier: null
+      tier: null,
+      context: {
+        mode: 'session',
+        score: round4(best.score),
+        affinity: round4(best.affinity),
+        freshness: round4(best.freshness),
+        globalPreference: round4(best.globalPreference),
+        beta: round4(beta),
+        signals: session.signals.length,
+        positiveSignals: session.signals.filter(s => s.strength > 0).length,
+        poolSize: candidates.length,
+        visited: state.visited.size
+      }
     }
   }
 }
@@ -140,6 +167,11 @@ export const NAV_MODES: Record<NavModeId, NavMode> = {
   drift: spatialDrift,
   journey: semanticJourney,
   session: sessionMode
+}
+
+/** Keep logged floats short; full precision is noise in a training row. */
+function round4(n: number): number {
+  return Math.round(n * 1e4) / 1e4
 }
 
 export function isNavMode(mode: PlayMode): mode is NavModeId {
