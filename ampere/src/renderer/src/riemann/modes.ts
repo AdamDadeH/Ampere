@@ -64,9 +64,9 @@ const spatialDrift: NavMode = {
   id: 'drift',
   label: 'Drift',
   description: 'Steps to the nearest unheard track in audio-embedding space.',
-  isAvailable: (data) => data.featureMap.size > 0,
+  isAvailable: (data) => data.unitVectors.size > 0,
   next: ({ data, state, currentTrackId }) => {
-    const trackId = embeddingDriftNext(state, data.featureMap, currentTrackId)
+    const trackId = embeddingDriftNext(state, data.unitVectors, currentTrackId)
     return trackId ? { trackId, source: 'drift', tier: null } : null
   }
 }
@@ -98,14 +98,14 @@ const sessionMode: NavMode = {
   id: 'session',
   label: 'Session',
   description: 'Follows what you are sustaining right now, over your overall taste.',
-  isAvailable: (data) => data.featureMap.size > 0,
+  isAvailable: (data) => data.unitVectors.size > 0,
   next: ({ data, state, session }) => {
     if (!session) return null
     const candidates: { trackId: string; globalPreference: number }[] = []
-    for (const trackId of data.featureMap.keys()) {
+    for (const trackId of data.unitVectors.keys()) {
       candidates.push({ trackId, globalPreference: session.globalPreference(trackId) })
     }
-    const best = pickBest(candidates, session.signals, data.featureMap, state.visited)
+    const best = pickBest(candidates, session.signals, data.unitVectors, state.visited)
     if (!best) return null
     // Record how much the session was actually steering, so a play can later
     // be attributed to session evidence rather than to the global prior.

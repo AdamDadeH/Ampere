@@ -47,7 +47,63 @@ export interface NavData {
   knn: KNNGraph
   /** Null on the Meyda source, which has no Semantic IDs. */
   semanticIndex: SemanticIndex | null
+  /** Raw feature vectors, as stored. Used for labelling and journeys. */
   featureMap: Map<string, number[]>
+  /**
+   * Comparable unit vectors for similarity queries, so a dot product is a
+   * cosine. Drift and session use these, never `featureMap` — see
+   * `toUnitVectors` for why the two differ.
+   */
+  unitVectors: Map<string, number[]>
+}
+
+/**
+ * Make vectors comparable so that dot product means cosine similarity.
+ *
+ * CLAP embeddings arrive L2-normalized and are passed through untouched.
+ * Meyda vectors are raw measurements whose dimensions differ by orders of
+ * magnitude — spectral centroid in the thousands next to zero-crossing rate
+ * in [0,1] — so a dot product over them measures whichever dimension happens
+ * to be largest, not similarity. Those are standardized per dimension first,
+ * then normalized.
+ *
+ * Detection is by observed norm rather than by source name, so a future
+ * feature set gets the right treatment without another branch here.
+ */
+export function toUnitVectors(vectors: ReadonlyMap<string, number[]>): Map<string, number[]> {
+  const out = new Map<string, number[]>()
+  if (vectors.size === 0) return out
+
+  const rows = Array.from(vectors.values())
+  const dim = rows[0].length
+
+  const l2 = (v: readonly number[]): number => Math.sqrt(v.reduce((a, x) => a + x * x, 0))
+  const meanNorm = rows.reduce((a, v) => a + l2(v), 0) / rows.length
+  const alreadyUnit = Math.abs(meanNorm - 1) < 0.01
+
+  let means: number[] = []
+  let stds: number[] = []
+  if (!alreadyUnit) {
+    means = new Array(dim).fill(0)
+    stds = new Array(dim).fill(0)
+    for (let j = 0; j < dim; j++) {
+      let sum = 0
+      for (const v of rows) sum += v[j] ?? 0
+      means[j] = sum / rows.length
+    }
+    for (let j = 0; j < dim; j++) {
+      let sq = 0
+      for (const v of rows) sq += ((v[j] ?? 0) - means[j]) ** 2
+      stds[j] = Math.sqrt(sq / rows.length) || 1
+    }
+  }
+
+  for (const [id, v] of vectors) {
+    const scaled = alreadyUnit ? v.slice() : v.map((x, j) => (x - means[j]) / stds[j])
+    const norm = l2(scaled) || 1
+    out.set(id, scaled.map(x => x / norm))
+  }
+  return out
 }
 
 /** IPC surface for a feature source. */
@@ -136,7 +192,7 @@ export function buildNavData(
     .map((d) => ({ trackId: d.track_id, sid: [d.sid_0!, d.sid_1!, d.sid_2!] as [number, number, number] }))
   const semanticIndex = sidNodes.length > 0 ? buildSemanticIndex(sidNodes) : null
 
-  return { nodes, trackIdToIndex, knn, semanticIndex, featureMap }
+  return { nodes, trackIdToIndex, knn, semanticIndex, featureMap, unitVectors: toUnitVectors(featureMap) }
 }
 
 /**
@@ -150,4 +206,23 @@ export async function loadNavData(source: FeatureSource): Promise<NavData | null
   const coordData = await featureApi(source).withCoords()
   if (coordData.length === 0) return null
   return buildNavData(coordData)
+}
+
+/**
+ * Pick the richest feature source the library actually has.
+ *
+ * CLAP comes from the standalone vq pipeline, which most installs will never
+ * run; Meyda is extracted in-app and needs nothing external. Preferring CLAP
+ * but falling back keeps drift and session working on a plain install instead
+ * of silently having no graph at all. Journey still requires Semantic IDs and
+ * reports itself unavailable without them.
+ */
+export async function bestAvailableSource(): Promise<FeatureSource | null> {
+  const [semantic, meyda] = await Promise.all([
+    window.api.getSemanticCount().catch(() => 0),
+    window.api.getFeatureCount().catch(() => 0)
+  ])
+  if (semantic > 0) return 'clap'
+  if (meyda > 0) return 'meyda'
+  return null
 }

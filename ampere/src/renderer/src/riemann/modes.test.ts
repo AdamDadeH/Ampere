@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { NAV_MODES, isNavMode, selectNext, createDriftState } from './modes'
-import { buildNavData, normalizeToNodes, CoordRow, SCALE_RANGE } from './nav-data'
+import { buildNavData, normalizeToNodes, toUnitVectors, CoordRow, SCALE_RANGE } from './nav-data'
 import { KNNGraph } from './navigation'
 import { NavData } from './nav-data'
 
@@ -8,14 +8,19 @@ const knnOf = (pairs: Record<string, string[]>): KNNGraph => ({
   neighbors: new Map(Object.entries(pairs))
 })
 
-const dataWith = (over: Partial<NavData>): NavData => ({
-  nodes: [],
-  trackIdToIndex: new Map(),
-  knn: knnOf({}),
-  semanticIndex: null,
-  featureMap: new Map(),
-  ...over
-})
+const dataWith = (over: Partial<NavData>): NavData => {
+  const featureMap = over.featureMap ?? new Map<string, number[]>()
+  return {
+    nodes: [],
+    trackIdToIndex: new Map(),
+    knn: knnOf({}),
+    semanticIndex: null,
+    featureMap,
+    // Mirrors buildNavData: similarity always runs on comparable vectors.
+    unitVectors: toUnitVectors(featureMap),
+    ...over
+  }
+}
 
 const coord = (id: string, x: number, y: number, z: number, sid?: [number, number, number]): CoordRow => ({
   track_id: id, features_json: '[1,2]', umap_x: x, umap_y: y, umap_z: z,
@@ -124,5 +129,46 @@ describe('normalizeToNodes', () => {
   it('carries the level-0 semantic code through for colouring', () => {
     const nodes = normalizeToNodes([coord('a', 0, 0, 0, [7, 1, 2])])
     expect(nodes[0].c0).toBe(7)
+  })
+})
+
+describe('toUnitVectors', () => {
+  it('leaves already-normalized embeddings alone', () => {
+    // CLAP arrives unit-norm; rescaling it would distort a well-formed space.
+    const clapish = new Map([['a', [0.6, 0.8]], ['b', [0, 1]], ['c', [1, 0]]])
+    const out = toUnitVectors(clapish)
+    expect(out.get('a')![0]).toBeCloseTo(0.6)
+    expect(out.get('a')![1]).toBeCloseTo(0.8)
+  })
+
+  it('stops one large-scale dimension from dominating similarity', () => {
+    // Meyda-shaped: dim 0 in the thousands, dim 1 in [0,1]. Raw dot products
+    // would rank purely on dim 0, so a and b would look near-identical
+    // despite disagreeing completely on dim 1.
+    const meydaish = new Map([
+      ['a', [5000, 0.9]],
+      ['b', [5010, 0.1]],
+      ['c', [5005, 0.5]]
+    ])
+    const raw = (x: number[], y: number[]): number => x[0] * y[0] + x[1] * y[1]
+    const a = meydaish.get('a')!, b = meydaish.get('b')!
+    expect(raw(a, b) / (raw(a, a) ** 0.5 * raw(b, b) ** 0.5)).toBeGreaterThan(0.999)
+
+    const out = toUnitVectors(meydaish)
+    const cos = out.get('a')!.reduce((acc, x, i) => acc + x * out.get('b')![i], 0)
+    expect(cos).toBeLessThan(0.5)
+  })
+
+  it('produces unit vectors', () => {
+    const out = toUnitVectors(new Map([['a', [3, 4]], ['b', [1, 2]], ['c', [10, 0]]]))
+    for (const v of out.values()) {
+      expect(Math.sqrt(v.reduce((a, x) => a + x * x, 0))).toBeCloseTo(1)
+    }
+  })
+
+  it('survives an empty set and a constant dimension', () => {
+    expect(toUnitVectors(new Map()).size).toBe(0)
+    const constant = toUnitVectors(new Map([['a', [5, 1]], ['b', [5, 2]]]))
+    for (const v of constant.values()) expect(v.every(Number.isFinite)).toBe(true)
   })
 })

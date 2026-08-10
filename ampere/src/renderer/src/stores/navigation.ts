@@ -9,7 +9,7 @@
  * over via `adoptData` instead of making the app load and project it twice.
  */
 import { create } from 'zustand'
-import { FeatureSource, NavData, loadNavData } from '../riemann/nav-data'
+import { FeatureSource, NavData, loadNavData, bestAvailableSource } from '../riemann/nav-data'
 import { createDriftState, DriftState, NavModeId, NavStep, selectNext } from '../riemann/modes'
 import { sessionSignals, SessionSignal } from '../riemann/session-affinity'
 
@@ -60,12 +60,16 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   signals: [],
 
   ensureLoaded: async () => {
-    const { data, isLoading, source } = get()
+    const { data, isLoading } = get()
     if (data || isLoading) return
     set({ isLoading: true })
     try {
+      // Most installs never run the vq pipeline, so choose whatever features
+      // exist rather than assuming CLAP.
+      const source = await bestAvailableSource()
+      if (!source) { set({ data: null, isLoading: false }); return }
       const loaded = await loadNavData(source)
-      set({ data: loaded, isLoading: false })
+      set({ data: loaded, source, isLoading: false })
     } catch (err) {
       console.error('Failed to load navigation data', err)
       set({ isLoading: false })
