@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   sessionSignals, recencyWeights, sessionAffinity, evidenceWeight,
-  scoreCandidates, pickBest, sessionDirection, SUSTAINED_THRESHOLD, REJECTED_THRESHOLD
+  scoreCandidates, pickBest, sessionDirection, freshness, SUSTAINED_THRESHOLD, REJECTED_THRESHOLD
 } from './session-affinity'
 
 const ev = (track_id: string, event_type: string, event_value: number | null = null) =>
@@ -211,5 +211,70 @@ describe('sessionDirection', () => {
   it('is null when the session has nothing usable', () => {
     expect(sessionDirection([], vectors)).toBeNull()
     expect(sessionDirection([{ trackId: 'missing', strength: 1 }], vectors)).toBeNull()
+  })
+})
+
+describe('freshness', () => {
+  const now = Date.UTC(2026, 7, 10, 12, 0, 0)
+  const daysAgo = (d: number): number => now - d * 86_400_000
+
+  it('treats a never-played track as fully eligible', () => {
+    // This is what pushes a walk into the unheard majority of a library
+    // instead of circling the few hundred tracks it already knows.
+    expect(freshness(null, now)).toBe(1)
+    expect(freshness(undefined, now)).toBe(1)
+  })
+
+  it('makes a just-played track effectively unreachable', () => {
+    expect(freshness(now, now)).toBe(0)
+    expect(freshness(daysAgo(0.01), now)).toBeLessThan(0.01)
+  })
+
+  it('recovers gradually rather than switching back on', () => {
+    const oneDay = freshness(daysAgo(1), now)
+    const twoWeeks = freshness(daysAgo(14), now)
+    const oneMonth = freshness(daysAgo(30), now)
+    expect(oneDay).toBeLessThan(0.2)
+    expect(twoWeeks).toBeGreaterThan(0.7)
+    expect(oneMonth).toBeGreaterThan(0.97)
+    expect(oneDay).toBeLessThan(twoWeeks)
+    expect(twoWeeks).toBeLessThan(oneMonth)
+  })
+
+  it('honours a custom recovery window', () => {
+    expect(freshness(daysAgo(1), now, 1)).toBeCloseTo(1 - Math.exp(-1), 5)
+  })
+
+  it('tolerates a future timestamp from a clock skew', () => {
+    expect(freshness(now + 86_400_000, now)).toBe(0)
+  })
+})
+
+describe('recency in scoring', () => {
+  const now = Date.UTC(2026, 7, 10, 12, 0, 0)
+
+  it('suppresses a recent favourite beneath a fresh alternative', () => {
+    const candidates = [
+      { trackId: 'x', globalPreference: 0.95, lastPlayedMs: now - 3600_000 },
+      { trackId: 'y', globalPreference: 0.4, lastPlayedMs: null }
+    ]
+    const best = pickBest(candidates, [], vectors, new Set(), now)
+    expect(best?.trackId).toBe('y')
+  })
+
+  it('lets the favourite win again once it has recovered', () => {
+    const candidates = [
+      { trackId: 'x', globalPreference: 0.95, lastPlayedMs: now - 60 * 86_400_000 },
+      { trackId: 'y', globalPreference: 0.4, lastPlayedMs: null }
+    ]
+    expect(pickBest(candidates, [], vectors, new Set(), now)?.trackId).toBe('x')
+  })
+
+  it('applies no penalty when no clock is supplied', () => {
+    const candidates = [
+      { trackId: 'x', globalPreference: 0.95, lastPlayedMs: now },
+      { trackId: 'y', globalPreference: 0.4, lastPlayedMs: null }
+    ]
+    expect(pickBest(candidates, [], vectors, new Set())?.trackId).toBe('x')
   })
 })

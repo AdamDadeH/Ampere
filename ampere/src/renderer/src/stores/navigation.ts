@@ -46,7 +46,8 @@ interface NavigationState {
   next: (
     mode: NavModeId,
     currentTrackId: string,
-    globalPreference?: (trackId: string) => number
+    globalPreference?: (trackId: string) => number,
+    lastPlayedAt?: (trackId: string) => number | null
   ) => NavStep | null
 }
 
@@ -109,7 +110,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     }
   },
 
-  next: (mode, currentTrackId, globalPreference) => {
+  next: (mode, currentTrackId, globalPreference, lastPlayedAt) => {
     const { data, coherence, signals } = get()
     if (!data) return null
 
@@ -124,7 +125,9 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       state: driftState,
       currentTrackId,
       coherence,
-      session: globalPreference ? { signals, globalPreference } : undefined
+      session: globalPreference
+        ? { signals, globalPreference, lastPlayedAt, nowMs: Date.now() }
+        : undefined
     })
     set({ lastTier: step?.tier ?? null })
     return step

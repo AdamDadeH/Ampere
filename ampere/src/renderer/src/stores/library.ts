@@ -358,7 +358,21 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         const r = ratingById.get(trackId)
         return r == null ? 0.5 : Math.max(0, Math.min(1, r / 5))
       }
-      const step = nav.next(playMode, currentTrack.id, globalPreference)
+
+      // Durable memory of what has been heard. `visited` only spans one walk
+      // and resets on every mode switch, so without last_played the same
+      // tracks resurface as soon as you change modes or restart.
+      const lastPlayedById = new Map(get().libraryTracks.map(t => [t.id, t.last_played]))
+      const lastPlayedAt = (trackId: string): number | null => {
+        const raw = lastPlayedById.get(trackId)
+        if (!raw) return null
+        // SQLite writes UTC as 'YYYY-MM-DD HH:MM:SS' with no zone; Date would
+        // read that as local time and shift every value by the UTC offset.
+        const t = Date.parse(`${raw.replace(' ', 'T')}Z`)
+        return Number.isNaN(t) ? null : t
+      }
+
+      const step = nav.next(playMode, currentTrack.id, globalPreference, lastPlayedAt)
       // Resolve against the full library, not the filtered view.
       const pool = get().libraryTracks.length ? get().libraryTracks : get().tracks
       const stepTrack = step ? pool.find(t => t.id === step.trackId) : undefined

@@ -35,6 +35,20 @@ export const RECENCY_HALF_LIFE = 3
  */
 export const EVIDENCE_MIDPOINT = 3
 
+/**
+ * Days over which a played track recovers most of its eligibility.
+ *
+ * `visited` is a scratchpad, not memory: it holds one walk and resets on every
+ * mode switch, so without this the same tracks resurface the moment you change
+ * modes or restart. `last_played` is the durable record, and recency is graded
+ * where a visited-set is binary — something heard an hour ago and something
+ * heard last spring are not the same kind of repeat.
+ *
+ * A guess, not a tuned value. At 7 days a track played yesterday recovers to
+ * ~13% eligibility, one from a fortnight ago ~75%, one from a month ago ~99%.
+ */
+export const RECENCY_RECOVERY_DAYS = 7
+
 export interface SessionEvent {
   track_id: string
   event_type: string
@@ -158,11 +172,38 @@ export interface Candidate {
   trackId: string
   /** Global preference, already normalized to [0, 1]. */
   globalPreference: number
+  /**
+   * Epoch ms this track was last played, or null if never. Drives the recency
+   * penalty; omit to disable it.
+   */
+  lastPlayedMs?: number | null
+}
+
+/**
+ * How eligible a track is given how recently it played, in [0, 1].
+ *
+ * Never-played tracks are fully eligible, which is what pushes a walk into the
+ * unheard majority of a library rather than circling the same few hundred
+ * tracks. Frequently-played favourites are not thereby buried: play count
+ * feeds the inferred rating, so they carry a higher global preference and
+ * recover their standing as the penalty decays.
+ */
+export function freshness(
+  lastPlayedMs: number | null | undefined,
+  nowMs: number,
+  recoveryDays: number = RECENCY_RECOVERY_DAYS
+): number {
+  if (lastPlayedMs == null) return 1
+  const days = (nowMs - lastPlayedMs) / 86_400_000
+  if (days <= 0) return 0
+  return 1 - Math.exp(-days / recoveryDays)
 }
 
 export interface ScoredCandidate extends Candidate {
   score: number
   affinity: number
+  /** Recency multiplier applied, 1 when never played or when disabled. */
+  freshness: number
 }
 
 /**
@@ -172,15 +213,20 @@ export interface ScoredCandidate extends Candidate {
 export function scoreCandidates(
   candidates: readonly Candidate[],
   signals: readonly SessionSignal[],
-  vectors: ReadonlyMap<string, number[]>
+  vectors: ReadonlyMap<string, number[]>,
+  nowMs?: number,
+  recoveryDays?: number
 ): ScoredCandidate[] {
   const beta = evidenceWeight(signals.length)
   const direction = sessionDirection(signals, vectors)   // computed once, not per candidate
   return candidates.map(c => {
     const vec = vectors.get(c.trackId)
     const affinity = vec && direction ? dot(vec, direction) : 0
-    const score = (1 - beta) * c.globalPreference + beta * ((affinity + 1) / 2)
-    return { ...c, score, affinity }
+    const preference = (1 - beta) * c.globalPreference + beta * ((affinity + 1) / 2)
+    // Recency multiplies rather than adds: a track played minutes ago should
+    // be unreachable however well it matches, not merely ranked lower.
+    const fresh = nowMs === undefined ? 1 : freshness(c.lastPlayedMs, nowMs, recoveryDays)
+    return { ...c, score: preference * fresh, affinity, freshness: fresh }
   })
 }
 
@@ -192,10 +238,12 @@ export function pickBest(
   candidates: readonly Candidate[],
   signals: readonly SessionSignal[],
   vectors: ReadonlyMap<string, number[]>,
-  visited: ReadonlySet<string>
+  visited: ReadonlySet<string>,
+  nowMs?: number,
+  recoveryDays?: number
 ): ScoredCandidate | null {
   let best: ScoredCandidate | null = null
-  for (const scored of scoreCandidates(candidates, signals, vectors)) {
+  for (const scored of scoreCandidates(candidates, signals, vectors, nowMs, recoveryDays)) {
     if (visited.has(scored.trackId)) continue
     if (!best || scored.score > best.score) best = scored
   }

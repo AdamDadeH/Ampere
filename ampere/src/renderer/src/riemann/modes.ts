@@ -11,7 +11,7 @@
 import { createDriftState, embeddingDriftNext, DriftState } from './navigation'
 import { semanticDriftNext } from './semantic-drift'
 import { NavData } from './nav-data'
-import { evidenceWeight, pickBest, SessionSignal } from './session-affinity'
+import { evidenceWeight, pickBest, type Candidate, type SessionSignal } from './session-affinity'
 
 /** Modes that walk a graph, as opposed to the queue orders (linear/random). */
 export type NavModeId = 'drift' | 'journey' | 'session'
@@ -47,6 +47,10 @@ export interface NavContext {
     signals: SessionSignal[]
     /** Global preference for a track, normalized to [0, 1]. */
     globalPreference: (trackId: string) => number
+    /** Epoch ms a track last played, or null if never. Drives the recency penalty. */
+    lastPlayedAt?: (trackId: string) => number | null
+    /** Current time, injected so scoring stays deterministic under test. */
+    nowMs?: number
   }
 }
 
@@ -101,11 +105,17 @@ const sessionMode: NavMode = {
   isAvailable: (data) => data.unitVectors.size > 0,
   next: ({ data, state, session }) => {
     if (!session) return null
-    const candidates: { trackId: string; globalPreference: number }[] = []
-    for (const trackId of data.unitVectors.keys()) {
-      candidates.push({ trackId, globalPreference: session.globalPreference(trackId) })
+    const candidates: Candidate[] = []
+    for (const trackId of Array.from(data.unitVectors.keys())) {
+      candidates.push({
+        trackId,
+        globalPreference: session.globalPreference(trackId),
+        lastPlayedMs: session.lastPlayedAt?.(trackId) ?? null
+      })
     }
-    const best = pickBest(candidates, session.signals, data.unitVectors, state.visited)
+    const best = pickBest(
+      candidates, session.signals, data.unitVectors, state.visited, session.nowMs
+    )
     if (!best) return null
 
     // Record the pick, exactly as the drift walks do inside embeddingDriftNext.
