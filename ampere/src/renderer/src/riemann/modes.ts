@@ -107,6 +107,14 @@ const sessionMode: NavMode = {
     }
     const best = pickBest(candidates, session.signals, data.unitVectors, state.visited)
     if (!best) return null
+
+    // Record the pick, exactly as the drift walks do inside embeddingDriftNext.
+    // Without this the walk has no memory of itself: pickBest filters on
+    // `visited`, but nothing ever added to it, so the same argmax won every
+    // step and the mode handed back one track forever.
+    state.visited.add(best.trackId)
+    state.trajectory.push(best.trackId)
+
     // Record how much the session was actually steering, so a play can later
     // be attributed to session evidence rather than to the global prior.
     const beta = evidenceWeight(session.signals.length)

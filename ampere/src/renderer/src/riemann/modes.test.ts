@@ -172,3 +172,49 @@ describe('toUnitVectors', () => {
     for (const v of constant.values()) expect(v.every(Number.isFinite)).toBe(true)
   })
 })
+
+describe('session mode', () => {
+  const data = dataWith({ featureMap: vecs })
+  const ctx = (state: ReturnType<typeof createDriftState>): Parameters<typeof selectNext>[1] => ({
+    data,
+    state,
+    currentTrackId: 'a',
+    coherence: 0.7,
+    session: { signals: [], globalPreference: (id) => (id === 'b' ? 0.9 : 0.5) }
+  })
+
+  it('never returns the same track twice — the walk must remember itself', () => {
+    // Regression: the mode read state.visited but never wrote to it, so the
+    // argmax was stable and it handed back one track forever.
+    const state = createDriftState('a')
+    const seen = new Set<string>()
+    for (let i = 0; i < 2; i++) {
+      const step = selectNext('session', ctx(state))
+      if (!step) break
+      expect(seen.has(step.trackId)).toBe(false)
+      seen.add(step.trackId)
+    }
+    expect(seen.size).toBe(2)
+  })
+
+  it('runs out rather than looping once everything is played', () => {
+    const state = createDriftState('a')
+    while (selectNext('session', ctx(state))) { /* exhaust */ }
+    expect(selectNext('session', ctx(state))).toBeNull()
+    // Every track accounted for exactly once.
+    expect(state.trajectory.length).toBe(vecs.size)
+    expect(new Set(state.trajectory).size).toBe(vecs.size)
+  })
+
+  it('records signal count and blend weight in the source', () => {
+    const step = selectNext('session', ctx(createDriftState('a')))
+    expect(step?.source).toMatch(/^session:0:0\.00$/)
+  })
+
+  it('is unavailable without session context', () => {
+    const step = selectNext('session', {
+      data, state: createDriftState('a'), currentTrackId: 'a', coherence: 0.7
+    })
+    expect(step).toBeNull()
+  })
+})
