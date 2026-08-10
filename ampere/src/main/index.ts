@@ -552,6 +552,9 @@ function setupIPC(): void {
 
   ipcMain.handle('get-nav-report', (_event, opts) => db.getNavReport(opts))
 
+  ipcMain.handle('get-setting', (_event, key: string) => db.getSetting(key))
+  ipcMain.handle('set-setting', (_event, key: string, value: string) => db.setSetting(key, value))
+
   ipcMain.handle('get-track-feedback', (_event, trackId: string) => {
     return db.getTrackFeedback(trackId)
   })

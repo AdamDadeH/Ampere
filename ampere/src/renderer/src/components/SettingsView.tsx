@@ -21,8 +21,15 @@ function formatBytes(bytes: number): string {
 }
 
 import { NavMonitor } from './NavMonitor'
+import { useDeveloperStore } from '../stores/developer'
 
 export function SettingsView(): React.JSX.Element {
+  const devEnabled = useDeveloperStore(s => s.enabled)
+  const devLoaded = useDeveloperStore(s => s.loaded)
+  const setDevEnabled = useDeveloperStore(s => s.setEnabled)
+  const loadDev = useDeveloperStore(s => s.load)
+  useEffect(() => { if (!devLoaded) void loadDev() }, [devLoaded, loadDev])
+
   const [stats, setStats] = useState<CacheStats | null>(null)
   const [limitGb, setLimitGb] = useState('')
   const [busy, setBusy] = useState<null | 'apply' | 'evict' | 'import'>(null)
@@ -199,14 +206,34 @@ export function SettingsView(): React.JSX.Element {
         </section>
 
         <section className="mb-8">
-          <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Navigation</h2>
-          <p className="text-sm text-text-muted mb-4">
-            How each play mode performs, split by the kind of session it happened in —
-            skipping fast is correct when sampling and a failure when settled, so the two
-            are not pooled.
+          <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Developer</h2>
+          <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={devEnabled}
+              onChange={(e) => void setDevEnabled(e.target.checked)}
+              className="accent-[#ffaa00]"
+            />
+            Show navigation instrumentation
+          </label>
+          <p className="text-[11px] text-text-muted mt-2">
+            Measurement tools for tuning how tracks are chosen. The numbers are noisy until
+            a few hundred plays have accumulated, and the thresholds behind them are still
+            being worked out.
           </p>
-          <NavMonitor />
         </section>
+
+        {devEnabled && (
+          <section className="mb-10">
+            <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Navigation</h2>
+            <p className="text-sm text-text-muted mb-4">
+              How each play mode performs, split by the kind of session it happened in —
+              skipping fast is correct when sampling and a failure when settled, so the two
+              are not pooled.
+            </p>
+            <NavMonitor />
+          </section>
+        )}
 
         <section className="mb-10">
           <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Maintenance</h2>
