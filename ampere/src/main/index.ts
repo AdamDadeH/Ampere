@@ -552,6 +552,11 @@ function setupIPC(): void {
 
   ipcMain.handle('get-nav-report', (_event, opts) => db.getNavReport(opts))
 
+  ipcMain.handle('sample-similarity-triplet', () => db.sampleSimilarityTriplet())
+  ipcMain.handle('record-similarity-triplet', (_e, anchorId: string, aId: string, bId: string, chosen: 'a'|'b'|'unsure', cosA: number, cosB: number) =>
+    db.recordSimilarityTriplet(anchorId, aId, bId, chosen, cosA, cosB))
+  ipcMain.handle('get-triplet-agreement', () => db.getTripletAgreement())
+
   ipcMain.handle('get-setting', (_event, key: string) => db.getSetting(key))
   ipcMain.handle('set-setting', (_event, key: string, value: string) => db.setSetting(key, value))
 

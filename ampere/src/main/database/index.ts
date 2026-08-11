@@ -8,6 +8,7 @@ import {
   pairOutcomes, summarize, summarizeByKind, completionHistogram, onSurface,
   type ModePerformance, type SessionKind
 } from './nav-performance'
+import { sampleTriplet, agreement, type TripletAgreement } from './triplets'
 import { parseArtists, isBrowsableArtist } from '../scanner/artist-parser'
 import { importSemanticIndex, type SemanticImportReport } from './clap-import'
 
@@ -894,6 +895,61 @@ export class LibraryDatabase {
       taggedOutcomes: all.filter(o => o.surface !== null).length,
       versions: this.getIndexVersions()
     }
+  }
+
+  /**
+   * A blind similarity question: an anchor and two candidates, identified only
+   * by id.
+   *
+   * No titles or artists are returned, and that is deliberate. Shown the
+   * metadata, the answer becomes "both of these are indie folk" — a judgement
+   * about labels, which would teach the metric to reproduce genre tags rather
+   * than perceived sound. Listening is the only intended way to answer, which
+   * also means familiarity stops mattering and the whole embedded library is
+   * eligible rather than the few hundred tracks that would be recognisable.
+   */
+  sampleSimilarityTriplet(): { anchorId: string; aId: string; bId: string; cosA: number; cosB: number; margin: number } | null {
+    const rows = this.db.prepare(
+      'SELECT track_id, clap FROM track_semantic'
+    ).all() as { track_id: string; clap: Buffer }[]
+    if (rows.length < 3) return null
+
+    const vectors = new Map<string, number[]>()
+    for (const r of rows) {
+      const f = new Float32Array(r.clap.buffer, r.clap.byteOffset, r.clap.byteLength / 4)
+      vectors.set(r.track_id, Array.from(f))
+    }
+
+    const t = sampleTriplet(vectors, Math.random)
+    if (!t) return null
+    return {
+      anchorId: t.anchorId,
+      aId: t.a.trackId,
+      bId: t.b.trackId,
+      cosA: t.a.cosine,
+      cosB: t.b.cosine,
+      margin: t.margin
+    }
+  }
+
+  recordSimilarityTriplet(
+    anchorId: string, aId: string, bId: string,
+    chosen: 'a' | 'b' | 'unsure', cosA: number, cosB: number
+  ): void {
+    const version = this.db.prepare(
+      "SELECT value FROM semantic_meta WHERE key = 'clap_model'"
+    ).get() as { value: string } | undefined
+    this.db.prepare(
+      'INSERT INTO similarity_triplets (anchor_id, a_id, b_id, chosen, cos_a, cos_b, embedding_version) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(anchorId, aId, bId, chosen, cosA, cosB, version?.value ?? null)
+  }
+
+  /** How often elicited similarity matched the embedding's. Chance is 50%. */
+  getTripletAgreement(): TripletAgreement {
+    const rows = this.db.prepare(
+      'SELECT chosen, cos_a, cos_b FROM similarity_triplets'
+    ).all() as { chosen: string; cos_a: number; cos_b: number }[]
+    return agreement(rows)
   }
 
   /** Every feedback event, oldest first — the input to session derivation. */

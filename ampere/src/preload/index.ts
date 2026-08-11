@@ -124,6 +124,9 @@ export interface ElectronAPI {
     taggedOutcomes: number
     versions: { id: number; embedding_version: string; codebook_version: string; n_tracks: number | null; activated_at: string }[]
   }>
+  sampleSimilarityTriplet(): Promise<{ anchorId: string; aId: string; bId: string; cosA: number; cosB: number; margin: number } | null>
+  recordSimilarityTriplet(anchorId: string, aId: string, bId: string, chosen: 'a'|'b'|'unsure', cosA: number, cosB: number): Promise<void>
+  getTripletAgreement(): Promise<{ total: number; agreed: number; unsure: number; rate: number; meanMargin: number }>
   getSetting(key: string): Promise<string | null>
   setSetting(key: string, value: string): Promise<void>
   recomputeInferredRatings(): Promise<void>
@@ -221,6 +224,10 @@ const api: ElectronAPI = {
   getTrackFeedback: (trackId) => ipcRenderer.invoke('get-track-feedback', trackId),
   getCurrentSessionFeedback: () => ipcRenderer.invoke('get-current-session-feedback'),
   getNavReport: (opts?) => ipcRenderer.invoke('get-nav-report', opts),
+  sampleSimilarityTriplet: () => ipcRenderer.invoke('sample-similarity-triplet'),
+  recordSimilarityTriplet: (anchorId, aId, bId, chosen, cosA, cosB) =>
+    ipcRenderer.invoke('record-similarity-triplet', anchorId, aId, bId, chosen, cosA, cosB),
+  getTripletAgreement: () => ipcRenderer.invoke('get-triplet-agreement'),
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key, value) => ipcRenderer.invoke('set-setting', key, value),
   recomputeInferredRatings: () => ipcRenderer.invoke('recompute-inferred-ratings'),

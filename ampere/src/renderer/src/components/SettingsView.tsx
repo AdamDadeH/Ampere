@@ -22,6 +22,7 @@ function formatBytes(bytes: number): string {
 
 import { NavMonitor } from './NavMonitor'
 import { useDeveloperStore } from '../stores/developer'
+import { TripletPanel } from './TripletPanel'
 
 export function SettingsView(): React.JSX.Element {
   const devEnabled = useDeveloperStore(s => s.enabled)
@@ -222,6 +223,17 @@ export function SettingsView(): React.JSX.Element {
             being worked out.
           </p>
         </section>
+
+        {devEnabled && (
+          <section className="mb-10">
+            <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Similarity check</h2>
+            <p className="text-sm text-text-muted mb-4">
+              Does the audio embedding hear similarity the way you do? Drift, Journey and Session
+              all navigate that space, so if it is skewed they are all built on it.
+            </p>
+            <TripletPanel />
+          </section>
+        )}
 
         {devEnabled && (
           <section className="mb-10">

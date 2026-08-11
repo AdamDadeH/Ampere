@@ -182,6 +182,34 @@ CREATE TABLE IF NOT EXISTS index_versions (
 );
 CREATE INDEX IF NOT EXISTS idx_index_versions_activated ON index_versions(activated_at);
 
+-- Elicited similarity judgements: "is the anchor closer to A or to B?"
+--
+-- Tests an assumption the navigation rests on but has never checked — that
+-- cosine distance in CLAP space matches perceived musical similarity. Drift
+-- picks nearest neighbours in that space, session affinity is cosine against a
+-- direction, and journey walks IDs derived from it. If the metric is skewed,
+-- no amount of preference modelling helps, because candidate generation
+-- happens upstream of preference.
+--
+-- The model's own prediction is stored alongside the answer so agreement is
+-- measurable after the fact, and embedding_version scopes it — a different
+-- CLAP checkpoint is a different space and its judgements do not pool.
+CREATE TABLE IF NOT EXISTS similarity_triplets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  anchor_id TEXT NOT NULL,
+  a_id TEXT NOT NULL,
+  b_id TEXT NOT NULL,
+  -- 'a', 'b', or 'unsure'. Unsure is kept: a genuine tie is information about
+  -- the metric, and discarding it would bias the agreement estimate.
+  chosen TEXT NOT NULL,
+  cos_a REAL NOT NULL,
+  cos_b REAL NOT NULL,
+  embedding_version TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (anchor_id) REFERENCES tracks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_triplets_created ON similarity_triplets(created_at);
+
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
