@@ -67,6 +67,15 @@ export interface NavMode {
   label: string
   /** Short description for the selector UI. */
   description: string
+  /**
+   * Whether the choice depends on how the current track turns out.
+   *
+   * Drift and journey step from where playback is, so the answer is the same
+   * whether you listen or skip — one precomputed pick serves both. Session
+   * scores against accumulated signals, so listening and skipping move the
+   * direction differently and each needs its own branch.
+   */
+  outcomeDependent: boolean
   /** Whether this mode can run against the given graph. */
   isAvailable: (data: NavData) => boolean
   next: (ctx: NavContext) => NavStep | null
@@ -76,6 +85,7 @@ const spatialDrift: NavMode = {
   id: 'drift',
   label: 'Drift',
   description: 'Steps to the nearest unheard track in audio-embedding space.',
+  outcomeDependent: false,
   isAvailable: (data) => data.unitVectors.size > 0,
   next: ({ data, state, currentTrackId }) => {
     const trackId = embeddingDriftNext(state, data.unitVectors, currentTrackId)
@@ -93,6 +103,7 @@ const semanticJourney: NavMode = {
   id: 'journey',
   label: 'Journey',
   description: 'Walks the Semantic ID hierarchy — needs CLAP embeddings.',
+  outcomeDependent: false,
   isAvailable: (data) => data.semanticIndex !== null,
   next: ({ data, state, currentTrackId, coherence }) => {
     if (!data.semanticIndex) return null
@@ -117,6 +128,7 @@ const sessionMode: NavMode = {
   id: 'session',
   label: 'Session',
   description: 'Follows what you are sustaining right now, over your overall taste.',
+  outcomeDependent: true,
   isAvailable: (data) => data.unitVectors.size > 0,
   next: ({ data, state, session }) => {
     if (!session) return null
@@ -190,6 +202,11 @@ export function selectNext(mode: NavModeId, ctx: NavContext): NavStep | null {
   if (chosen && chosen.isAvailable(ctx.data)) return chosen.next(ctx)
   if (mode === 'journey') return spatialDrift.next(ctx)
   return null
+}
+
+/** Copy a walk so a speculative step cannot corrupt the real one. */
+export function cloneDriftState(state: DriftState): DriftState {
+  return { visited: new Set(state.visited), trajectory: [...state.trajectory] }
 }
 
 export { createDriftState }

@@ -168,6 +168,8 @@ interface LibraryState {
   getUpcomingTrackIds: (count: number) => string[]
   togglePin: (trackId: string) => Promise<void>
   recordFeedback: (trackId: string, eventType: string, eventValue: number | null, source: string | null, context?: Record<string, unknown> | null) => void
+  /** Decide and prefetch the next track while this one plays. No-op off nav modes. */
+  schedulePrecompute: (currentTrackId: string) => void
   lovingThis: () => void
   likeNotNow: () => void
   notFeelingIt: () => void
@@ -320,6 +322,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       })
     }
     get().recordFeedback(track.id, 'track_started', null, source || 'intentional_select', context)
+    get().schedulePrecompute(track.id)
   },
 
   togglePlayPause: () => {
@@ -372,7 +375,16 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         return Number.isNaN(t) ? null : t
       }
 
-      const step = nav.next(playMode, currentTrack.id, globalPreference, lastPlayedAt)
+      // Which branch actually happened, judged the same way sessionSignals
+      // judges it, so the precomputed context matches what gets logged.
+      const completion = duration > 0 ? currentTime / duration : 0
+      const sustained = reason === 'auto_advance' || completion >= 0.7
+
+      // Prefer the step decided during playback: its audio has been prefetched,
+      // which is the multi-second cost. Falls back to deciding now.
+      const step =
+        nav.consumePending(currentTrack.id, playMode, sustained) ??
+        nav.next(playMode, currentTrack.id, globalPreference, lastPlayedAt)
       // Resolve against the full library, not the filtered view.
       const pool = get().libraryTracks.length ? get().libraryTracks : get().tracks
       const stepTrack = step ? pool.find(t => t.id === step.trackId) : undefined
@@ -432,6 +444,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     // Record track_started for incoming track
     const incomingSource = shuffle ? 'shuffle' : 'auto_advance'
     get().recordFeedback(incoming.id, 'track_started', null, incomingSource)
+    get().schedulePrecompute(incoming.id)
   },
 
   prevTrack: () => {
@@ -583,10 +596,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   getUpcomingTrackIds: (count) => {
     const { queue, queueIndex, shuffle, shuffledIndices, shufflePosition, driftNext, playMode } = get()
     if (driftNext || queue.length === 0) return []
-    // A graph walk decides its next track at the moment of advancing, so queue
-    // order predicts nothing here. Prefetching from it would warm three tracks
-    // that will not play while missing the one that will. Returning nothing is
-    // honest until the walk precomputes its pick.
+    // A graph walk's next track has nothing to do with queue order, so
+    // prefetching from it would warm tracks that will not play. The walk
+    // prefetches its own precomputed branches instead — see schedulePrecompute.
     if (isNavMode(playMode)) return []
 
     const ids: string[] = []
@@ -625,6 +637,25 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         ? { ...state.currentTrack, pinned: newPinned }
         : state.currentTrack,
     }))
+  },
+
+  schedulePrecompute: (currentTrackId) => {
+    const { playMode, libraryTracks } = get()
+    if (!isNavMode(playMode) || libraryTracks.length === 0) return
+
+    const ratingById = new Map(libraryTracks.map(t => [t.id, t.inferred_rating]))
+    const lastPlayedById = new Map(libraryTracks.map(t => [t.id, t.last_played]))
+    const globalPreference = (trackId: string): number => {
+      const r = ratingById.get(trackId)
+      return r == null ? 0.5 : Math.max(0, Math.min(1, r / 5))
+    }
+    const lastPlayedAt = (trackId: string): number | null => {
+      const raw = lastPlayedById.get(trackId)
+      if (!raw) return null
+      const t = Date.parse(`${raw.replace(' ', 'T')}Z`)
+      return Number.isNaN(t) ? null : t
+    }
+    useNavigationStore.getState().precompute(playMode, currentTrackId, globalPreference, lastPlayedAt)
   },
 
   recordFeedback: (trackId, eventType, eventValue, source, context) => {

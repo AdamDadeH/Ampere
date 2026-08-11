@@ -10,8 +10,29 @@
  */
 import { create } from 'zustand'
 import { FeatureSource, NavData, loadNavData, bestAvailableSource } from '../riemann/nav-data'
-import { createDriftState, DriftState, NavModeId, NavStep, selectNext } from '../riemann/modes'
+import {
+  cloneDriftState, createDriftState, DriftState, NAV_MODES, NavModeId, NavStep, selectNext
+} from '../riemann/modes'
 import { sessionSignals, SessionSignal } from '../riemann/session-affinity'
+
+/**
+ * The next pick, decided while the current track is still playing.
+ *
+ * Computed early not to hide inference latency — that is milliseconds — but so
+ * the chosen track's audio can be prefetched. For a cloud-backed library that
+ * is the difference between instant and several seconds of materialising.
+ *
+ * Two branches because the answer can depend on how the current track ends:
+ * sustaining it and abandoning it push the session in different directions.
+ * Outcome-independent modes fill both with the same step.
+ */
+interface PendingStep {
+  /** Track that was playing when this was computed; stale if it has changed. */
+  fromTrackId: string
+  mode: NavModeId
+  onListen: NavStep | null
+  onSkip: NavStep | null
+}
 
 interface NavigationState {
   data: NavData | null
@@ -24,6 +45,8 @@ interface NavigationState {
   lastTier: string | null
   /** Signed preference signals from the session in progress, oldest first. */
   signals: SessionSignal[]
+  /** Next pick decided during playback, or null when nothing is precomputed. */
+  pending: PendingStep | null
 
   /** Load the graph if it isn't loaded already. Safe to call repeatedly. */
   ensureLoaded: () => Promise<void>
@@ -37,6 +60,22 @@ interface NavigationState {
   markVisited: (trackId: string) => void
   /** Pull the live session's events and reduce them to signals. */
   refreshSession: () => Promise<void>
+  /**
+   * Decide the next track (both branches) without committing to it, and warm
+   * its audio. Speculative: runs against a cloned walk so nothing is marked
+   * visited until a step is actually taken.
+   */
+  precompute: (
+    mode: NavModeId,
+    currentTrackId: string,
+    globalPreference: (trackId: string) => number,
+    lastPlayedAt?: (trackId: string) => number | null
+  ) => void
+  /**
+   * Take the precomputed step for how the track actually ended, committing it
+   * to the real walk. Null when nothing usable was precomputed.
+   */
+  consumePending: (currentTrackId: string, mode: NavModeId, sustained: boolean) => NavStep | null
   /**
    * Ask the active mode for the next track. Null when it cannot move.
    * `globalPreference` is supplied by the caller — the library store owns
@@ -59,6 +98,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   coherence: 0.7,
   lastTier: null,
   signals: [],
+  pending: null,
 
   ensureLoaded: async () => {
     const { data, isLoading } = get()
@@ -108,6 +148,61 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     } catch (err) {
       console.error('Failed to load session feedback', err)
     }
+  },
+
+  precompute: (mode, currentTrackId, globalPreference, lastPlayedAt) => {
+    const { data, coherence, signals, driftState } = get()
+    if (!data) return
+
+    const base = driftState ?? createDriftState(currentTrackId)
+    const nowMs = Date.now()
+    const build = (hypothetical: SessionSignal[]): NavStep | null =>
+      selectNext(mode, {
+        data,
+        // Cloned: a speculative step must not mark anything visited.
+        state: cloneDriftState(base),
+        currentTrackId,
+        coherence,
+        session: { signals: hypothetical, globalPreference, lastPlayedAt, nowMs }
+      })
+
+    let onListen: NavStep | null
+    let onSkip: NavStep | null
+    if (NAV_MODES[mode]?.outcomeDependent) {
+      onListen = build([...signals, { trackId: currentTrackId, strength: 1 }])
+      onSkip = build([...signals, { trackId: currentTrackId, strength: -1 }])
+    } else {
+      onListen = build(signals)
+      onSkip = onListen
+    }
+
+    set({ pending: { fromTrackId: currentTrackId, mode, onListen, onSkip } })
+
+    // Warm whichever tracks could come next. Distinct ids only — the two
+    // branches usually agree for outcome-independent modes.
+    const ids = Array.from(new Set([onListen?.trackId, onSkip?.trackId].filter(Boolean) as string[]))
+    if (ids.length > 0) window.api.prefetchTracks(ids).catch(console.error)
+  },
+
+  consumePending: (currentTrackId, mode, sustained) => {
+    const { pending, driftState } = get()
+    if (!pending) return null
+    // Anything can have happened since — a manual pick, a mode switch.
+    if (pending.fromTrackId !== currentTrackId || pending.mode !== mode) {
+      set({ pending: null })
+      return null
+    }
+
+    const step = sustained ? pending.onListen : pending.onSkip
+    set({ pending: null })
+    if (!step) return null
+
+    // Commit to the real walk only now that the step is actually being taken.
+    const committed = driftState ?? createDriftState(currentTrackId)
+    committed.visited.add(step.trackId)
+    committed.trajectory.push(step.trackId)
+    set({ driftState: committed, lastTier: step.tier })
+    return step
   },
 
   next: (mode, currentTrackId, globalPreference, lastPlayedAt) => {

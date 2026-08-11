@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { NAV_MODES, isNavMode, selectNext, createDriftState } from './modes'
+import { NAV_MODES, isNavMode, selectNext, createDriftState, cloneDriftState } from './modes'
 import { buildNavData, normalizeToNodes, toUnitVectors, CoordRow, SCALE_RANGE } from './nav-data'
 import { KNNGraph } from './navigation'
 import { NavData } from './nav-data'
@@ -231,5 +231,59 @@ describe('session mode', () => {
       data, state: createDriftState('a'), currentTrackId: 'a', coherence: 0.7
     })
     expect(step).toBeNull()
+  })
+})
+
+describe('speculative stepping', () => {
+  it('marks which modes need a branch per outcome', () => {
+    // Drift and journey step from where playback is, so the answer is the same
+    // either way. Session scores against accumulated signals, which listening
+    // and skipping move differently.
+    expect(NAV_MODES.drift.outcomeDependent).toBe(false)
+    expect(NAV_MODES.journey.outcomeDependent).toBe(false)
+    expect(NAV_MODES.session.outcomeDependent).toBe(true)
+  })
+
+  it('leaves the original walk untouched when stepping a clone', () => {
+    // Precompute runs before the user has committed to anything. If it marked
+    // tracks visited, an abandoned speculation would silently consume them.
+    const real = createDriftState('a')
+    const data = dataWith({ featureMap: vecs })
+
+    const speculative = cloneDriftState(real)
+    selectNext('drift', { data, state: speculative, currentTrackId: 'a', coherence: 0.7 })
+
+    expect(real.visited.size).toBe(1)
+    expect(real.trajectory).toEqual(['a'])
+    expect(speculative.visited.size).toBe(2)
+  })
+
+  it('clones deeply enough that later mutation does not leak back', () => {
+    const real = createDriftState('a')
+    const copy = cloneDriftState(real)
+    copy.visited.add('b')
+    copy.trajectory.push('b')
+    expect(real.visited.has('b')).toBe(false)
+    expect(real.trajectory).toEqual(['a'])
+  })
+
+  it('gives the two session branches different answers', () => {
+    // The point of branching: sustaining versus abandoning the current track
+    // moves the direction, so the next pick genuinely differs.
+    const data = dataWith({ featureMap: vecs })
+    const base = { data, currentTrackId: 'a', coherence: 0.7 }
+    const gp = (): number => 0.5
+
+    const liked = selectNext('session', {
+      ...base,
+      state: cloneDriftState(createDriftState('a')),
+      session: { signals: [{ trackId: 'c', strength: 1 }], globalPreference: gp }
+    })
+    const disliked = selectNext('session', {
+      ...base,
+      state: cloneDriftState(createDriftState('a')),
+      session: { signals: [{ trackId: 'c', strength: -1 }], globalPreference: gp }
+    })
+    expect(liked?.trackId).not.toBe(disliked?.trackId)
   })
 })
