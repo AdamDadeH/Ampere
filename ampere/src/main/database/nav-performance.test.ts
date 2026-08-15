@@ -60,12 +60,14 @@ describe('pairOutcomes', () => {
     expect(out).toEqual([])
   })
 
-  it('treats a valueless completion as a full listen', () => {
+  it('drops an outcome with no recorded fraction rather than guessing', () => {
+    // A null fraction means the duration was unknown — some files report none.
+    // Counting it as either a full listen or a rejection would fabricate data.
     const done: FeedbackEvent = {
       track_id: 'a', event_type: 'track_completed', event_value: null,
       attention_weight: 1, source: null, surface: null, created_at: at(1)
     }
-    expect(pairOutcomes([start(0, 'a', 'drift'), done])[0].completion).toBe(1)
+    expect(pairOutcomes([start(0, 'a', 'drift'), done])).toEqual([])
   })
 })
 

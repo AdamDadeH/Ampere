@@ -25,7 +25,10 @@ export class MusicMetadataExtractor implements MetadataExtractor {
     track: TrackUpsertData
     entities: { type: string; names: string[] }[]
   }> {
-    const metadata = await parseFile(filePath)
+    // duration:true makes music-metadata scan frames when the header carries no
+    // duration, which headerless VBR MP3s do not. Costs nothing on files that
+    // do — it only falls back to scanning when there is no other way to know.
+    const metadata = await parseFile(filePath, { duration: true })
     const { common, format } = metadata
 
     let artworkPath: string | null = null
@@ -70,7 +73,7 @@ export class MusicMetadataExtractor implements MetadataExtractor {
       sample_rate: format.sampleRate || null,
       codec: format.codec || null,
       artwork_path: artworkPath,
-      sync_status: this.resolveSyncStatus(filePath, source),
+      sync_status: this.resolveSyncStatus(filePath, source, format),
       cloud_path: this.resolveCloudPath(filePath, source),
       source_id: source?.sourceId ?? null
     }
@@ -90,11 +93,25 @@ export class MusicMetadataExtractor implements MetadataExtractor {
     }
   }
 
-  private resolveSyncStatus(filePath: string, source?: SourceContext): string {
-    if (source?.sourceType === 'proton-drive' || isProtonDrivePath(filePath)) {
-      return isFileMaterialized(filePath) ? 'cached' : 'cloud-only'
-    }
-    return 'local'
+  private resolveSyncStatus(
+    filePath: string,
+    source?: SourceContext,
+    format?: { container?: string; duration?: number }
+  ): string {
+    const isCloud = source?.sourceType === 'proton-drive' || isProtonDrivePath(filePath)
+    if (!isCloud) return 'local'
+
+    // isFileMaterialized checks allocation, not content: a file given disk
+    // blocks by a failed sync but never filled looks identical to a real one —
+    // not SF_DATALESS, not sparse, full size, and entirely zeros inside.
+    // Parsing already tells us the truth. No recognisable container means no
+    // audio was found, so the bytes are not actually here; calling it
+    // cloud-only lets the download path fetch it again instead of serving a
+    // silent file that fails on playback.
+    const parsedNoAudio = format != null && !format.container && !(format.duration && format.duration > 0)
+    if (parsedNoAudio) return 'cloud-only'
+
+    return isFileMaterialized(filePath) ? 'cached' : 'cloud-only'
   }
 
   private resolveCloudPath(filePath: string, source?: SourceContext): string | null {

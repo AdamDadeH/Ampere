@@ -115,8 +115,11 @@ export function pairOutcomes(
         if (next.track_id !== start.track_id) continue
         if (next.event_type !== 'track_skipped' && next.event_type !== 'track_completed') continue
 
-        // A completion with no recorded value means the track ran to the end.
-        const completion = next.event_value ?? (next.event_type === 'track_completed' ? 1 : 0)
+        // No recorded fraction means the duration was unknown, so how much was
+        // played is unknown too. Dropping it keeps unmeasurable plays out of
+        // the rates rather than counting them as rejections.
+        if (next.event_value == null) break
+        const completion = next.event_value
         outcomes.push({
           sessionKind,
           mode: start.source.split(':')[0],

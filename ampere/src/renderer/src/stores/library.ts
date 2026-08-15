@@ -332,13 +332,18 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   nextTrack: (reason) => {
     const { queue, queueIndex, shuffle, shuffledIndices, shufflePosition, repeatMode, driftNext, currentTrack, currentTime, duration } = get()
 
-    // Record feedback for the outgoing track
+    // Record feedback for the outgoing track.
+    //
+    // Null, not zero, when the duration is unknown. Some files report no
+    // duration — headerless VBR, or a failed sync that left an allocated but
+    // empty file — and scoring those as 0% played logged them as rejections
+    // whatever the listener did. An unknown fraction is unknown; inventing a
+    // value would put fabricated dislikes into the training data.
+    const completion = duration > 0 ? currentTime / duration : null
     if (currentTrack) {
       if (reason === 'auto_advance') {
-        const completion = duration > 0 ? currentTime / duration : 0
         get().recordFeedback(currentTrack.id, 'track_completed', completion, null)
       } else if (reason) {
-        const completion = duration > 0 ? currentTime / duration : 0
         get().recordFeedback(currentTrack.id, 'track_skipped', completion, null)
       }
     }
@@ -376,9 +381,10 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       }
 
       // Which branch actually happened, judged the same way sessionSignals
-      // judges it, so the precomputed context matches what gets logged.
-      const completion = duration > 0 ? currentTime / duration : 0
-      const sustained = reason === 'auto_advance' || completion >= 0.7
+      // judges it, so the precomputed context matches what gets logged. With
+      // an unknown fraction, reaching the end of the track is the only
+      // evidence available.
+      const sustained = reason === 'auto_advance' || (completion !== null && completion >= 0.7)
 
       // Prefer the step decided during playback: its audio has been prefetched,
       // which is the multi-second cost. Falls back to deciding now.
