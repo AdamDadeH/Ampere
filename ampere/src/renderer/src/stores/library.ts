@@ -361,6 +361,11 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       // inferred_rating is the global model's output, 0–5; the session scorer
       // wants [0,1]. Unrated tracks sit at the midpoint rather than at zero,
       // so "no prediction" doesn't read as "disliked".
+      // A walk must never land on a file with no audio in it — the player
+      // stalls rather than failing cleanly, so the whole session stops.
+      const unplayable = new Set(
+        get().libraryTracks.filter(t => t.sync_status === 'unplayable').map(t => t.id)
+      )
       const ratingById = new Map(get().libraryTracks.map(t => [t.id, t.inferred_rating]))
       const globalPreference = (trackId: string): number => {
         const r = ratingById.get(trackId)
@@ -394,7 +399,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       // Resolve against the full library, not the filtered view.
       const pool = get().libraryTracks.length ? get().libraryTracks : get().tracks
       const stepTrack = step ? pool.find(t => t.id === step.trackId) : undefined
-      if (step && stepTrack) {
+      if (step && stepTrack && !unplayable.has(step.trackId)) {
         get().playTrack(stepTrack, pool, step.source, step.context)
         // The outgoing track's outcome was recorded moments ago; pick it up so
         // the next step sees it. Async, so signals lag by at most one step.

@@ -515,6 +515,22 @@ function setupIPC(): void {
     db.unpinTrack(trackId)
   })
 
+  ipcMain.handle('count-tracks-needing-repair', () => db.countTracksNeedingRepair())
+
+  ipcMain.handle('repair-track-metadata', async (_event, includeCloud: boolean) => {
+    const rows = db.getTracksNeedingRepair(!includeCloud)
+    const files = rows.map(r => ({ path: r.file_path, name: r.file_name, size: r.file_size }))
+    const before = db.countTracksNeedingRepair()
+    const result = await scanner.repairTracks(files)
+    const after = db.countTracksNeedingRepair()
+    return {
+      examined: result.examined,
+      failed: result.failed,
+      recovered: (before.local + before.cloudOnly) - (after.local + after.cloudOnly),
+      remaining: after
+    }
+  })
+
   ipcMain.handle('evict-cache', async () => {
     return cacheManager.evict()
   })

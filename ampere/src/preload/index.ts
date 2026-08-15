@@ -127,6 +127,8 @@ export interface ElectronAPI {
   sampleSimilarityTriplet(): Promise<{ anchorId: string; aId: string; bId: string; cosA: number; cosB: number; margin: number } | null>
   recordSimilarityTriplet(anchorId: string, aId: string, bId: string, chosen: 'a'|'b'|'unsure', cosA: number, cosB: number): Promise<void>
   getTripletAgreement(): Promise<{ total: number; agreed: number; unsure: number; rate: number; meanMargin: number }>
+  countTracksNeedingRepair(): Promise<{ local: number; cloudOnly: number }>
+  repairTrackMetadata(includeCloud: boolean): Promise<{ examined: number; failed: number; recovered: number; remaining: { local: number; cloudOnly: number } }>
   getSetting(key: string): Promise<string | null>
   setSetting(key: string, value: string): Promise<void>
   recomputeInferredRatings(): Promise<void>
@@ -228,6 +230,8 @@ const api: ElectronAPI = {
   recordSimilarityTriplet: (anchorId, aId, bId, chosen, cosA, cosB) =>
     ipcRenderer.invoke('record-similarity-triplet', anchorId, aId, bId, chosen, cosA, cosB),
   getTripletAgreement: () => ipcRenderer.invoke('get-triplet-agreement'),
+  countTracksNeedingRepair: () => ipcRenderer.invoke('count-tracks-needing-repair'),
+  repairTrackMetadata: (includeCloud) => ipcRenderer.invoke('repair-track-metadata', includeCloud),
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key, value) => ipcRenderer.invoke('set-setting', key, value),
   recomputeInferredRatings: () => ipcRenderer.invoke('recompute-inferred-ratings'),

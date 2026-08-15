@@ -952,6 +952,27 @@ export class LibraryDatabase {
     return agreement(rows)
   }
 
+  /**
+   * Tracks whose duration was never determined.
+   *
+   * `localOnly` matters: most of these live on Proton Drive, and reading a
+   * cloud-only file triggers a download, so repairing everything would pull
+   * the library back down. Cached files are free to re-examine.
+   */
+  getTracksNeedingRepair(localOnly = true): { id: string; file_path: string; file_name: string; file_size: number; sync_status: string }[] {
+    const sql = localOnly
+      ? "SELECT id, file_path, file_name, file_size, sync_status FROM tracks WHERE duration <= 0 AND sync_status != 'cloud-only'"
+      : 'SELECT id, file_path, file_name, file_size, sync_status FROM tracks WHERE duration <= 0'
+    return this.db.prepare(sql).all() as { id: string; file_path: string; file_name: string; file_size: number; sync_status: string }[]
+  }
+
+  countTracksNeedingRepair(): { local: number; cloudOnly: number } {
+    const row = this.db.prepare(
+      "SELECT SUM(sync_status != 'cloud-only') AS local, SUM(sync_status = 'cloud-only') AS cloudOnly FROM tracks WHERE duration <= 0"
+    ).get() as { local: number | null; cloudOnly: number | null }
+    return { local: row.local ?? 0, cloudOnly: row.cloudOnly ?? 0 }
+  }
+
   /** Every feedback event, oldest first — the input to session derivation. */
   getAllFeedback(): FeedbackRow[] {
     return this.db.prepare(

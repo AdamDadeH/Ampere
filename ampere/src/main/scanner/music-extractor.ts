@@ -101,15 +101,18 @@ export class MusicMetadataExtractor implements MetadataExtractor {
     const isCloud = source?.sourceType === 'proton-drive' || isProtonDrivePath(filePath)
     if (!isCloud) return 'local'
 
-    // isFileMaterialized checks allocation, not content: a file given disk
-    // blocks by a failed sync but never filled looks identical to a real one —
-    // not SF_DATALESS, not sparse, full size, and entirely zeros inside.
-    // Parsing already tells us the truth. No recognisable container means no
-    // audio was found, so the bytes are not actually here; calling it
-    // cloud-only lets the download path fetch it again instead of serving a
-    // silent file that fails on playback.
+    // isFileMaterialized checks allocation, not content: a file a failed sync
+    // gave disk blocks but never filled looks identical to a real one — not
+    // SF_DATALESS, not sparse, full size, and entirely zeros inside. Parsing
+    // knows better, and no recognisable container means no audio was found.
+    //
+    // Not 'cloud-only': reading such a file through to the end returns zeros
+    // and does not trigger materialisation, so the bytes are not merely
+    // absent, they are not coming. Marking it fetchable would retry a download
+    // forever and stall the player every time. 'unplayable' says what is true
+    // and lets playback and navigation skip it.
     const parsedNoAudio = format != null && !format.container && !(format.duration && format.duration > 0)
-    if (parsedNoAudio) return 'cloud-only'
+    if (parsedNoAudio) return 'unplayable'
 
     return isFileMaterialized(filePath) ? 'cached' : 'cloud-only'
   }
