@@ -95,6 +95,36 @@ describe('resolveTrackIdentity', () => {
     expect(m).toEqual({ trackId: 'track-1', strategy: 'embedded-id' })
   })
 
+  it('does not steal a living track\'s identity for a copy of its audio', () => {
+    const lookups: IdentityLookups = {
+      byEmbeddedId: () => undefined,
+      byFilePath: () => undefined,
+      byContentHash: () => 'track-1',
+      currentPathOf: () => known.path,
+      fileExists: (p) => p === known.path
+    }
+    const m = resolveTrackIdentity(
+      { filePath: '/music/Copies/same song.mp3', embeddedId: null, contentHash: known.contentHash },
+      lookups
+    )
+    expect(m).toEqual({ trackId: null, strategy: 'none' })
+  })
+
+  it('does adopt the file when the original is gone', () => {
+    const lookups: IdentityLookups = {
+      byEmbeddedId: () => undefined,
+      byFilePath: () => undefined,
+      byContentHash: () => 'track-1',
+      currentPathOf: () => known.path,
+      fileExists: () => false
+    }
+    const m = resolveTrackIdentity(
+      { filePath: '/music/Correct Artist/Correct Album/01 Song.mp3', embeddedId: null, contentHash: known.contentHash },
+      lookups
+    )
+    expect(m).toEqual({ trackId: 'track-1', strategy: 'content-hash' })
+  })
+
   it('treats genuinely new audio as new', () => {
     const m = resolveTrackIdentity(
       { filePath: '/music/Other/New.mp3', embeddedId: 'different-uuid', contentHash: 'different-audio' },

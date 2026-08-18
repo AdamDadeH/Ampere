@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import { app } from 'electron'
 import { join } from 'path'
-import { mkdirSync } from 'fs'
+import { mkdirSync, existsSync } from 'fs'
 import { SCHEMA_SQL, SCHEMA_VERSION } from './schema'
 import { sessionize, currentSession, SESSION_GAP_MS } from './sessions'
 import {
@@ -175,7 +175,9 @@ export class LibraryDatabase {
         byContentHash: (h) => {
           const rows = this.db.prepare('SELECT id FROM tracks WHERE content_hash = ? LIMIT 2').all(h) as { id: string }[]
           return rows.length === 1 ? rows[0].id : undefined
-        }
+        },
+        currentPathOf: (trackId) => (this.db.prepare('SELECT file_path FROM tracks WHERE id = ?').get(trackId) as { file_path: string } | undefined)?.file_path,
+        fileExists: (p) => existsSync(p)
       }
     )
 
