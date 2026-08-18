@@ -202,7 +202,7 @@ export function AudioEngine(): React.JSX.Element {
 
       if (ready) start(result.url)
       else fail('Could not download from cloud storage')
-    }).catch((err) => fail(String(err?.message ?? err)))
+    }).catch((err: unknown) => fail(err instanceof Error ? err.message : String(err)))
   }, [currentTrackId, setCurrentTime, setDuration, initAudioChain, broadcastNow])
 
   // Prefetch upcoming tracks after current track starts loading
