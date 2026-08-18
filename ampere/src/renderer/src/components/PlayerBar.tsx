@@ -16,7 +16,7 @@ function formatDuration(seconds: number): string {
 export function PlayerBar(): React.JSX.Element {
   const {
     currentTrack, isPlaying, volume, queue, queueIndex,
-    currentTime, duration, shuffle, repeatMode, playMode,
+    currentTime, duration, shuffle, repeatMode, playMode, playbackError,
     togglePlayPause, nextTrack, prevTrack, setVolume, seekTo, setRating,
     toggleShuffle, cycleRepeat, lovingThis, likeNotNow, notFeelingIt
   } = useLibraryStore()
@@ -82,6 +82,15 @@ export function PlayerBar(): React.JSX.Element {
           <PlayModeSelector />
           <TrackLoadStatus />
           <NavStatus />
+          {playbackError && (
+            <span
+              className="flex items-center gap-1.5 text-[11px] text-red-400"
+              title={`${playbackError.reason}. Playback moved on without recording a skip.`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+              {playbackError.reason}
+            </span>
+          )}
           <button
             onClick={toggleShuffle}
             className={`transition-colors cursor-pointer ${shuffle ? 'text-[#ffaa00]' : 'text-text-faint hover:text-text-primary'}`}

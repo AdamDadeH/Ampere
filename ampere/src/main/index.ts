@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, protocol, net } from 'electron'
 import { join, extname } from 'path'
 import { pathToFileURL } from 'url'
-import { createReadStream, readFileSync, statSync } from 'fs'
+import { createReadStream, readFileSync, statSync, existsSync } from 'fs'
 import { createServer, Server } from 'http'
 
 // Lock userData to lowercase 'ampere' so the packaged app (productName "Ampere")
@@ -338,12 +338,19 @@ function setupIPC(): void {
     const track = db.getTrack(trackId)
     if (!track) return null
 
+    // A file that is gone and a file that has not downloaded yet look the
+    // same to isFileMaterialized — it returns false for both — so the player
+    // waited forever for a materialisation that was never coming. They are
+    // different failures and the caller has to be able to tell them apart.
+    const exists = existsSync(track.file_path)
     const isPD = isProtonDrivePath(track.file_path)
-    const materialized = isPD ? isFileMaterialized(track.file_path) : true
+    const materialized = exists && (isPD ? isFileMaterialized(track.file_path) : true)
 
     return {
       url: `http://127.0.0.1:${audioServerPort}/${encodeURIComponent(track.file_path)}`,
       available: materialized,
+      missing: !exists,
+      unplayable: track.sync_status === 'unplayable',
       downloading: activeDownloads.has(track.file_path),
       syncStatus: track.sync_status
     }

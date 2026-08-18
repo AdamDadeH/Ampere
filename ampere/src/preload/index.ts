@@ -32,6 +32,10 @@ export interface QueueTrackInfo {
 export interface TrackPathResult {
   url: string
   available: boolean
+  /** The file is not on disk at all — distinct from not yet downloaded. */
+  missing: boolean
+  /** The file is present but contains no decodable audio. */
+  unplayable: boolean
   downloading: boolean
   syncStatus: string
 }

@@ -132,6 +132,14 @@ interface LibraryState {
 
   // Cloud-first download state
   downloadingTrackId: string | null
+  /**
+   * Why the current track could not be played, or null.
+   *
+   * Playback failures used to end in `console.error` or in no branch at all,
+   * so a track that could not load simply stopped and looked like the player
+   * hanging. A failure the listener cannot see is a failure they cannot act on.
+   */
+  playbackError: { trackId: string; reason: string } | null
 
   // Navigation override — set by Riemann navigator for drift/walk modes
   driftNext: (() => void) | null
@@ -170,6 +178,8 @@ interface LibraryState {
   recordFeedback: (trackId: string, eventType: string, eventValue: number | null, source: string | null, context?: Record<string, unknown> | null) => void
   /** Decide and prefetch the next track while this one plays. No-op off nav modes. */
   schedulePrecompute: (currentTrackId: string) => void
+  reportPlaybackError: (trackId: string, reason: string) => void
+  clearPlaybackError: () => void
   lovingThis: () => void
   likeNotNow: () => void
   notFeelingIt: () => void
@@ -209,6 +219,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   scanProgress: null,
   isScanning: false,
   downloadingTrackId: null,
+  playbackError: null,
   driftNext: null,
 
   loadLibrary: async () => {
@@ -649,6 +660,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         : state.currentTrack,
     }))
   },
+
+  reportPlaybackError: (trackId, reason) => set({ playbackError: { trackId, reason }, isPlaying: false }),
+  clearPlaybackError: () => set({ playbackError: null }),
 
   schedulePrecompute: (currentTrackId) => {
     const { playMode, libraryTracks } = get()
