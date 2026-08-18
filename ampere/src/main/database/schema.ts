@@ -24,8 +24,17 @@ CREATE TABLE IF NOT EXISTS tracks (
   date_added TEXT NOT NULL DEFAULT (datetime('now')),
   date_modified TEXT NOT NULL DEFAULT (datetime('now')),
   sync_status TEXT NOT NULL DEFAULT 'local',
-  cloud_path TEXT
+  cloud_path TEXT,
+  -- Identity derived from the audio payload with tags excluded. The embedded
+  -- AMPERE_ID lives in a tag that third-party taggers also own and rewrite;
+  -- when that happened, thousands of tracks lost their identity at once and
+  -- became rows pointing at files that had moved. Audio bytes do not change
+  -- when tags do, so this survives retagging, renaming and reorganisation —
+  -- and gives formats we never managed to tag an identity at all.
+  content_hash TEXT,
+  content_bytes INTEGER
 );
+CREATE INDEX IF NOT EXISTS idx_tracks_content_hash ON tracks(content_hash);
 
 CREATE TABLE IF NOT EXISTS playlists (
   id TEXT PRIMARY KEY,

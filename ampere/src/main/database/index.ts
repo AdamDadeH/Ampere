@@ -9,6 +9,7 @@ import {
   type ModePerformance, type SessionKind
 } from './nav-performance'
 import { sampleTriplet, agreement, type TripletAgreement } from './triplets'
+import { resolveTrackIdentity } from './track-identity'
 import { parseArtists, isBrowsableArtist } from '../scanner/artist-parser'
 import { importSemanticIndex, type SemanticImportReport } from './clap-import'
 
@@ -40,6 +41,8 @@ export interface Track {
   cloud_path: string | null
   last_accessed: string | null
   pinned: number
+  content_hash: string | null
+  content_bytes: number | null
   source_id: string | null
   inferred_rating: number | null
 }
@@ -124,6 +127,11 @@ export class LibraryDatabase {
     addColumnSafe('ALTER TABLE tracks ADD COLUMN source_id TEXT')
     addColumnSafe('ALTER TABLE tracks ADD COLUMN inferred_rating REAL DEFAULT NULL')
 
+    // Content-derived identity — see schema.ts.
+    addColumnSafe('ALTER TABLE tracks ADD COLUMN content_hash TEXT')
+    addColumnSafe('ALTER TABLE tracks ADD COLUMN content_bytes INTEGER')
+    try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_content_hash ON tracks(content_hash)') } catch { /* exists */ }
+
     // Which UI surface a feedback event came from — see schema.ts.
     addColumnSafe('ALTER TABLE track_feedback ADD COLUMN surface TEXT')
     addColumnSafe('ALTER TABLE track_feedback ADD COLUMN context_json TEXT')
@@ -153,44 +161,34 @@ export class LibraryDatabase {
    * then falls back to file_path. Updates metadata and path on match.
    */
   upsertTrack(track: TrackUpsertData): string {
-    // Strategy 1: Match by embedded_id (strongest — survives rename/move)
-    if (track.embedded_id) {
-      const existing = this.db.prepare(
-        'SELECT id, play_count, rating, last_played, date_added FROM tracks WHERE embedded_id = ?'
-      ).get(track.embedded_id) as Pick<Track, 'id' | 'play_count' | 'rating' | 'last_played' | 'date_added'> | undefined
-
-      if (existing) {
-        // Update everything (including file_path which may have changed)
-        this.db.prepare(`
-          UPDATE tracks SET
-            file_path = ?, file_name = ?, file_size = ?,
-            title = ?, artist = ?, album = ?, album_artist = ?,
-            genre = ?, year = ?, track_number = ?, disc_number = ?,
-            duration = ?, bitrate = ?, sample_rate = ?, codec = ?,
-            artwork_path = ?, sync_status = ?, cloud_path = ?, source_id = ?,
-            date_modified = datetime('now')
-          WHERE id = ?
-        `).run(
-          track.file_path, track.file_name, track.file_size,
-          track.title, track.artist, track.album, track.album_artist,
-          track.genre, track.year, track.track_number, track.disc_number,
-          track.duration, track.bitrate, track.sample_rate, track.codec,
-          track.artwork_path, track.sync_status, track.cloud_path, track.source_id,
-          existing.id
-        )
-        return existing.id
+    // Which existing row, if any, this file is. Rules and their ordering live
+    // in track-identity.ts, where they are tested; this only supplies lookups.
+    const match = resolveTrackIdentity(
+      { embeddedId: track.embedded_id, filePath: track.file_path, contentHash: track.content_hash },
+      {
+        byEmbeddedId: (id) => (this.db.prepare('SELECT id FROM tracks WHERE embedded_id = ?').get(id) as { id: string } | undefined)?.id,
+        byFilePath: (p) => (this.db.prepare('SELECT id FROM tracks WHERE file_path = ?').get(p) as { id: string } | undefined)?.id,
+        // Only answers when the audio identifies exactly one row. Libraries
+        // contain genuine duplicates — the same recording on an album and a
+        // compilation — and picking one arbitrarily would rewrite the wrong
+        // track's path and misattribute its ratings. Ambiguous is not identity.
+        byContentHash: (h) => {
+          const rows = this.db.prepare('SELECT id FROM tracks WHERE content_hash = ? LIMIT 2').all(h) as { id: string }[]
+          return rows.length === 1 ? rows[0].id : undefined
+        }
       }
-    }
+    )
 
-    // Strategy 2: Match by file_path (fallback for files without embedded ID)
-    const existingByPath = this.db.prepare(
-      'SELECT id FROM tracks WHERE file_path = ?'
-    ).get(track.file_path) as { id: string } | undefined
-
-    if (existingByPath) {
+    if (match.trackId) {
+      // Everything the scan observed is refreshed, including the path and the
+      // identity columns — a file found by its audio may be carrying a new
+      // embedded id, or none at all, and the row should record what is true.
       this.db.prepare(`
         UPDATE tracks SET
-          embedded_id = ?, file_name = ?, file_size = ?,
+          embedded_id = COALESCE(?, embedded_id),
+          content_hash = COALESCE(?, content_hash),
+          content_bytes = COALESCE(?, content_bytes),
+          file_path = ?, file_name = ?, file_size = ?,
           title = ?, artist = ?, album = ?, album_artist = ?,
           genre = ?, year = ?, track_number = ?, disc_number = ?,
           duration = ?, bitrate = ?, sample_rate = ?, codec = ?,
@@ -198,22 +196,23 @@ export class LibraryDatabase {
           date_modified = datetime('now')
         WHERE id = ?
       `).run(
-        track.embedded_id, track.file_name, track.file_size,
+        track.embedded_id, track.content_hash ?? null, track.content_bytes ?? null,
+        track.file_path, track.file_name, track.file_size,
         track.title, track.artist, track.album, track.album_artist,
         track.genre, track.year, track.track_number, track.disc_number,
         track.duration, track.bitrate, track.sample_rate, track.codec,
         track.artwork_path, track.sync_status, track.cloud_path, track.source_id,
-        existingByPath.id
+        match.trackId
       )
-      return existingByPath.id
+      return match.trackId
     }
 
-    // Strategy 3: New track — insert
+    // Nothing matched: genuinely new audio.
     this.db.prepare(`
-      INSERT INTO tracks (id, embedded_id, file_path, file_name, file_size,
+      INSERT INTO tracks (id, embedded_id, content_hash, content_bytes, file_path, file_name, file_size,
         title, artist, album, album_artist, genre, year, track_number, disc_number,
         duration, bitrate, sample_rate, codec, artwork_path, sync_status, cloud_path, source_id)
-      VALUES (@id, @embedded_id, @file_path, @file_name, @file_size,
+      VALUES (@id, @embedded_id, @content_hash, @content_bytes, @file_path, @file_name, @file_size,
         @title, @artist, @album, @album_artist, @genre, @year, @track_number, @disc_number,
         @duration, @bitrate, @sample_rate, @codec, @artwork_path, @sync_status, @cloud_path, @source_id)
     `).run(track)

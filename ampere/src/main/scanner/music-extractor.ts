@@ -6,6 +6,7 @@ import { app } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
 import { TrackUpsertData } from '../database'
 import { ensureEmbeddedId } from './tagger'
+import { computeContentId } from './content-id'
 import { parseArtists } from './artist-parser'
 import type { MetadataExtractor, SourceContext } from './index'
 import { isFileMaterialized, isProtonDrivePath } from '../storage/proton-drive'
@@ -75,7 +76,17 @@ export class MusicMetadataExtractor implements MetadataExtractor {
       artwork_path: artworkPath,
       sync_status: this.resolveSyncStatus(filePath, source, format),
       cloud_path: this.resolveCloudPath(filePath, source),
-      source_id: source?.sourceId ?? null
+      source_id: source?.sourceId ?? null,
+      // Identity from the audio itself, so this file stays recognisable
+      // however it is later renamed, moved or retagged.
+      content_hash: null as string | null,
+      content_bytes: null as number | null
+    }
+
+    const contentId = computeContentId(filePath)
+    if (contentId) {
+      track.content_hash = contentId.hash
+      track.content_bytes = contentId.payloadBytes
     }
 
     // Try to read or write the embedded AMPERE_ID
