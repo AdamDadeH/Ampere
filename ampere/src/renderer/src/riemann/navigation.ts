@@ -137,6 +137,57 @@ export function driftNext(state: DriftState, knn: KNNGraph, currentTrackId: stri
   return next
 }
 
+/**
+ * Pick the next track by nearest neighbour in embedding space.
+ *
+ * Drift used to walk the KNN graph built from UMAP coordinates. That made it
+ * a function of the projection, which is unseeded and refits whenever the
+ * library grows — so the same mode behaved differently after every
+ * reprojection and its metrics were not comparable across them. UMAP also
+ * distorts distances by construction, and the coords are min-maxed per axis
+ * on top of that, so the walk was following a doubly-distorted metric.
+ *
+ * Querying the embeddings directly is deterministic, tied only to the CLAP
+ * model, and needs no precomputed graph: one pass of dot products answers
+ * "nearest unvisited" in the same cost as one step of session scoring.
+ * Vectors are L2-normalized, so the dot product is cosine similarity.
+ *
+ * Mutates `state`, like the graph version did. Falls back to the nearest
+ * visited track when everything close has been played, rather than stopping.
+ */
+export function embeddingDriftNext(
+  state: DriftState,
+  vectors: ReadonlyMap<string, number[]>,
+  currentTrackId: string
+): string | null {
+  const current = vectors.get(currentTrackId)
+  if (!current) return null
+
+  let bestUnvisited: string | null = null
+  let bestUnvisitedSim = -Infinity
+  let bestAny: string | null = null
+  let bestAnySim = -Infinity
+
+  for (const [trackId, vec] of vectors) {
+    if (trackId === currentTrackId) continue
+    let sim = 0
+    const n = Math.min(current.length, vec.length)
+    for (let i = 0; i < n; i++) sim += current[i] * vec[i]
+
+    if (sim > bestAnySim) { bestAnySim = sim; bestAny = trackId }
+    if (!state.visited.has(trackId) && sim > bestUnvisitedSim) {
+      bestUnvisitedSim = sim
+      bestUnvisited = trackId
+    }
+  }
+
+  const next = bestUnvisited ?? bestAny
+  if (!next) return null
+  state.visited.add(next)
+  state.trajectory.push(next)
+  return next
+}
+
 // ── KNN Picker with semantic labels ──────────────────────────────────
 
 export interface LabeledNeighbor {

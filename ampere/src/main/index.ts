@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, protocol, net } from 'electron'
 import { join, extname } from 'path'
 import { pathToFileURL } from 'url'
-import { createReadStream, readFileSync, statSync } from 'fs'
+import { createReadStream, readFileSync, statSync, existsSync } from 'fs'
 import { createServer, Server } from 'http'
 
 // Lock userData to lowercase 'ampere' so the packaged app (productName "Ampere")
@@ -338,12 +338,19 @@ function setupIPC(): void {
     const track = db.getTrack(trackId)
     if (!track) return null
 
+    // A file that is gone and a file that has not downloaded yet look the
+    // same to isFileMaterialized — it returns false for both — so the player
+    // waited forever for a materialisation that was never coming. They are
+    // different failures and the caller has to be able to tell them apart.
+    const exists = existsSync(track.file_path)
     const isPD = isProtonDrivePath(track.file_path)
-    const materialized = isPD ? isFileMaterialized(track.file_path) : true
+    const materialized = exists && (isPD ? isFileMaterialized(track.file_path) : true)
 
     return {
       url: `http://127.0.0.1:${audioServerPort}/${encodeURIComponent(track.file_path)}`,
       available: materialized,
+      missing: !exists,
+      unplayable: track.sync_status === 'unplayable',
       downloading: activeDownloads.has(track.file_path),
       syncStatus: track.sync_status
     }
@@ -429,6 +436,32 @@ function setupIPC(): void {
     db.bulkSetUmapCoords(coords)
   })
   ipcMain.handle('get-feature-count', () => db.getFeatureCount())
+
+  // Semantic index (CLAP + RQ-VAE Semantic IDs from the standalone vq pipeline)
+  ipcMain.handle('import-semantic-index', async (_event, vqDbPath?: string) => {
+    let path = vqDbPath
+    if (!path) {
+      if (!mainWindow) return null
+      // Default the picker to the in-repo vq cache; dev runs from ampere/.
+      const defaultPath = join(app.getAppPath(), '..', 'vq', 'cache', 'ampere_index.sqlite')
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: 'Select vq Semantic Index (ampere_index.sqlite)',
+        defaultPath,
+        properties: ['openFile'],
+        filters: [{ name: 'SQLite index', extensions: ['sqlite', 'db'] }]
+      })
+      if (result.canceled || result.filePaths.length === 0) return null
+      path = result.filePaths[0]
+    }
+    return db.importSemanticIndex(path)
+  })
+  ipcMain.handle('get-semantic-count', () => db.getSemanticCount())
+  ipcMain.handle('get-semantic-features', () => db.getSemanticFeatures())
+  ipcMain.handle('get-semantic-features-with-coords', () => db.getSemanticFeaturesWithCoords())
+  ipcMain.handle('bulk-set-semantic-umap-coords', (_event, coords: { trackId: string; x: number; y: number; z: number }[]) => {
+    db.bulkSetSemanticUmapCoords(coords)
+  })
+  ipcMain.handle('get-semantic-code-names', () => db.getSemanticCodeNames())
   ipcMain.handle('read-audio-file', async (_event, filePath: string) => {
     // For Proton Drive files, ensure materialized before reading
     if (isProtonDrivePath(filePath) && !isFileMaterialized(filePath)) {
@@ -489,6 +522,22 @@ function setupIPC(): void {
     db.unpinTrack(trackId)
   })
 
+  ipcMain.handle('count-tracks-needing-repair', () => db.countTracksNeedingRepair())
+
+  ipcMain.handle('repair-track-metadata', async (_event, includeCloud: boolean) => {
+    const rows = db.getTracksNeedingRepair(!includeCloud)
+    const files = rows.map(r => ({ path: r.file_path, name: r.file_name, size: r.file_size }))
+    const before = db.countTracksNeedingRepair()
+    const result = await scanner.repairTracks(files)
+    const after = db.countTracksNeedingRepair()
+    return {
+      examined: result.examined,
+      failed: result.failed,
+      recovered: (before.local + before.cloudOnly) - (after.local + after.cloudOnly),
+      remaining: after
+    }
+  })
+
   ipcMain.handle('evict-cache', async () => {
     return cacheManager.evict()
   })
@@ -518,9 +567,21 @@ function setupIPC(): void {
   })
 
   // Feedback
-  ipcMain.handle('record-feedback', (_event, trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null) => {
-    db.recordFeedback(trackId, eventType, eventValue, attentionWeight, source)
+  ipcMain.handle('record-feedback', (_event, trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null, surface: string | null, contextJson: string | null) => {
+    db.recordFeedback(trackId, eventType, eventValue, attentionWeight, source, surface, contextJson)
   })
+
+  ipcMain.handle('get-current-session-feedback', () => db.getCurrentSessionFeedback())
+
+  ipcMain.handle('get-nav-report', (_event, opts) => db.getNavReport(opts))
+
+  ipcMain.handle('sample-similarity-triplet', () => db.sampleSimilarityTriplet())
+  ipcMain.handle('record-similarity-triplet', (_e, anchorId: string, aId: string, bId: string, chosen: 'a'|'b'|'unsure', cosA: number, cosB: number) =>
+    db.recordSimilarityTriplet(anchorId, aId, bId, chosen, cosA, cosB))
+  ipcMain.handle('get-triplet-agreement', () => db.getTripletAgreement())
+
+  ipcMain.handle('get-setting', (_event, key: string) => db.getSetting(key))
+  ipcMain.handle('set-setting', (_event, key: string, value: string) => db.setSetting(key, value))
 
   ipcMain.handle('get-track-feedback', (_event, trackId: string) => {
     return db.getTrackFeedback(trackId)

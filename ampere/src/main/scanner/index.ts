@@ -138,6 +138,45 @@ export class FolderScanner {
     })
   }
 
+  /**
+   * Re-read metadata for specific files, ignoring the unchanged-file skip.
+   *
+   * A normal scan compares path and size and skips anything that matches, so a
+   * track recorded with a bad duration is never looked at again — its size has
+   * not changed and never will. Repairs have to name the files explicitly.
+   *
+   * Used for the tracks that report no duration: headerless VBR MP3s whose
+   * duration the old scan never asked for, and files a failed sync left
+   * allocated but empty, which re-extraction now marks cloud-only so the
+   * download path fetches them again.
+   */
+  async repairTracks(
+    files: { path: string; name: string; size: number }[],
+    source?: SourceContext,
+    onProgress?: (done: number, total: number, current: string) => void
+  ): Promise<{ examined: number; failed: number }> {
+    let examined = 0
+    let failed = 0
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      onProgress?.(i + 1, files.length, file.name)
+      try {
+        const { track, entities } = await this.extractor.extract(file.path, file.name, file.size, source)
+        const resolvedId = this.db.upsertTrack(track)
+        for (const entity of entities) {
+          if (entity.type === 'artist') this.db.setTrackArtists(resolvedId, entity.names)
+          else if (entity.type === 'album_artist') this.db.setTrackAlbumArtists(resolvedId, entity.names)
+        }
+        examined++
+      } catch (err) {
+        console.error(`Repair failed for ${file.path}:`, err)
+        failed++
+      }
+    }
+    return { examined, failed }
+  }
+
   private sendProgress(window: BrowserWindow, progress: ScanProgress): void {
     if (!window.isDestroyed()) {
       window.webContents.send('scan-progress', progress)

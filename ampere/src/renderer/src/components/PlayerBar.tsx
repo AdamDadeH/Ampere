@@ -2,6 +2,10 @@ import { useCallback } from 'react'
 import { useLibraryStore } from '../stores/library'
 import { AlbumArt } from './AlbumArt'
 import { StarRating } from './StarRating'
+import { PlayModeSelector } from './PlayModeSelector'
+import { NavStatus } from './NavStatus'
+import { TrackLoadStatus } from './TrackLoadStatus'
+import { isNavMode } from '../riemann/modes'
 
 function formatDuration(seconds: number): string {
   const mins = Math.floor(seconds / 60)
@@ -12,10 +16,15 @@ function formatDuration(seconds: number): string {
 export function PlayerBar(): React.JSX.Element {
   const {
     currentTrack, isPlaying, volume, queue, queueIndex,
-    currentTime, duration, shuffle, repeatMode,
+    currentTime, duration, shuffle, repeatMode, playMode, playbackError,
     togglePlayPause, nextTrack, prevTrack, setVolume, seekTo, setRating,
     toggleShuffle, cycleRepeat, lovingThis, likeNotNow, notFeelingIt
   } = useLibraryStore()
+
+  // Nav modes walk a graph, so queue position says nothing about whether there
+  // is a next track. Gating transport on it strands the mode at the end of
+  // whatever list playback happened to start from.
+  const walking = isNavMode(playMode)
 
   const handleSeek = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (!duration) return
@@ -70,10 +79,22 @@ export function PlayerBar(): React.JSX.Element {
       {/* Controls — unified transport + feedback strip */}
       <div className="flex-1 flex flex-col items-center gap-1">
         <div className="flex items-center gap-3">
+          <PlayModeSelector />
+          <TrackLoadStatus />
+          <NavStatus />
+          {playbackError && (
+            <span
+              className="flex items-center gap-1.5 text-[11px] text-red-400"
+              title={`${playbackError.reason}. Playback moved on without recording a skip.`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+              {playbackError.reason}
+            </span>
+          )}
           <button
             onClick={toggleShuffle}
             className={`transition-colors cursor-pointer ${shuffle ? 'text-[#ffaa00]' : 'text-text-faint hover:text-text-primary'}`}
-            title="Shuffle"
+            title={shuffle ? 'Shuffle on — click to return to the previous mode' : 'Shuffle (overrides the current mode)'}
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
               <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z" />
@@ -92,7 +113,7 @@ export function PlayerBar(): React.JSX.Element {
           <button
             onClick={prevTrack}
             className="text-text-faint hover:text-text-primary transition-colors cursor-pointer"
-            disabled={queueIndex <= 0}
+            disabled={!walking && queueIndex <= 0}
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
               <path d="M6 6h2v12H6zm3.5 6 8.5 6V6z" />
@@ -116,7 +137,7 @@ export function PlayerBar(): React.JSX.Element {
           <button
             onClick={() => nextTrack('manual_skip')}
             className="text-text-faint hover:text-text-primary transition-colors cursor-pointer"
-            disabled={queueIndex >= queue.length - 1}
+            disabled={!walking && queueIndex >= queue.length - 1}
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
               <path d="m6 18 8.5-6L6 6v12zm2 0h2V6h-2v12z" transform="scale(-1,1) translate(-24,0)" />

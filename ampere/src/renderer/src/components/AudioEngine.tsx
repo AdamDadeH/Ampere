@@ -10,6 +10,9 @@ const emptyFrequencyData: number[] = new Array(SPECTRUM_BINS).fill(0)
 // Standard 10-band Winamp EQ frequencies
 const EQ_FREQUENCIES = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000, 16000]
 
+/** Consecutive unplayable tracks before advancing stops, so a bad run cannot spin. */
+const MAX_CONSECUTIVE_SKIPS = 5
+
 export function AudioEngine(): React.JSX.Element {
   const audioRef = useRef<HTMLAudioElement>(null)
   const playCountedRef = useRef(false)
@@ -122,6 +125,34 @@ export function AudioEngine(): React.JSX.Element {
 
   // Load track when the track *identity* changes (not when metadata like rating updates)
   const currentTrackId = currentTrack?.id ?? null
+  const consecutiveFailuresRef = useRef(0)
+  const failedTrackRef = useRef<string | null>(null)
+
+  /**
+   * Move past a track that cannot be played.
+   *
+   * Advances with no reason argument, so nothing is written to the feedback
+   * log. A file that failed to load is not a skip the listener performed, and
+   * recording it as one would put fabricated rejections into the data the
+   * recommender learns from.
+   *
+   * Stops after a run of failures rather than racing through the library: if
+   * a whole album is unreadable, the listener should see the error, not watch
+   * the player churn.
+   */
+  const skipUnplayable = useCallback((trackId: string) => {
+    if (failedTrackRef.current === trackId) return
+    failedTrackRef.current = trackId
+    consecutiveFailuresRef.current += 1
+    if (consecutiveFailuresRef.current > MAX_CONSECUTIVE_SKIPS) return
+
+    setTimeout(() => {
+      const store = useLibraryStore.getState()
+      if (store.currentTrack?.id !== trackId) return
+      store.nextTrack()
+    }, 700)
+  }, [])
+
   useEffect(() => {
     const audio = audioRef.current
     if (!audio || !currentTrackId) return
@@ -130,33 +161,48 @@ export function AudioEngine(): React.JSX.Element {
     setCurrentTime(0)
     setDuration(0)
 
-    window.api.getTrackPath(currentTrackId).then(async (result) => {
-      if (!result) return
+    const store = useLibraryStore.getState()
+    store.clearPlaybackError()
+
+    // Every branch below either plays or reports. Silence is what made a
+    // moved file look like the player hanging.
+    const fail = (reason: string): void => {
+      if (useLibraryStore.getState().currentTrack?.id !== currentTrackId) return
+      useLibraryStore.setState({ downloadingTrackId: null })
+      useLibraryStore.getState().reportPlaybackError(currentTrackId, reason)
+      skipUnplayable(currentTrackId)
+    }
+
+    const start = (url: string): void => {
+      audio.src = url
+      audio.play().then(() => {
+        consecutiveFailuresRef.current = 0
+        failedTrackRef.current = null
+        initAudioChain()
+      }).catch((err: unknown) => fail(err instanceof Error ? err.message : String(err)))
+      setTimeout(broadcastNow, 50)
+    }
+
+    window.api.getTrackPath(currentTrackId).then(async (result: {
+      url: string; available: boolean; missing?: boolean; unplayable?: boolean
+    } | null) => {
+      if (!result) { fail('Track is no longer in the library'); return }
+      if (result.missing) { fail('File not found on disk'); return }
+      if (result.unplayable) { fail('File contains no playable audio'); return }
 
       if (result.available) {
-        // File is on disk — play immediately
-        audio.src = result.url
-        audio.play().then(() => {
-          initAudioChain()
-        }).catch(console.error)
-        setTimeout(broadcastNow, 50)
-      } else {
-        // Cloud-only file — request download, then play when ready
-        useLibraryStore.setState({ downloadingTrackId: currentTrackId })
-        const ready = await window.api.requestTrackDownload(currentTrackId)
-        // Check we're still on the same track (user may have clicked another)
-        if (useLibraryStore.getState().currentTrack?.id !== currentTrackId) return
-        useLibraryStore.setState({ downloadingTrackId: null })
-
-        if (ready) {
-          audio.src = result.url
-          audio.play().then(() => {
-            initAudioChain()
-          }).catch(console.error)
-          setTimeout(broadcastNow, 50)
-        }
+        start(result.url)
+        return
       }
-    })
+
+      useLibraryStore.setState({ downloadingTrackId: currentTrackId })
+      const ready = await window.api.requestTrackDownload(currentTrackId)
+      if (useLibraryStore.getState().currentTrack?.id !== currentTrackId) return
+      useLibraryStore.setState({ downloadingTrackId: null })
+
+      if (ready) start(result.url)
+      else fail('Could not download from cloud storage')
+    }).catch((err: unknown) => fail(err instanceof Error ? err.message : String(err)))
   }, [currentTrackId, setCurrentTime, setDuration, initAudioChain, broadcastNow])
 
   // Prefetch upcoming tracks after current track starts loading
@@ -278,6 +324,9 @@ export function AudioEngine(): React.JSX.Element {
   useEffect(() => {
     const unsubscribe = window.api.onPlayerCommand((command: string, ...args: unknown[]) => {
       const store = useLibraryStore.getState()
+      // The command came from the compact window, so that is the surface the
+      // user acted from — not whatever view this renderer happens to show.
+      store.setActiveSurface('compact')
       switch (command) {
         case 'toggle-play-pause':
           store.togglePlayPause()

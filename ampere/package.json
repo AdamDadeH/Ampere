@@ -6,6 +6,7 @@
     "dev": "electron-vite dev -c electron-vite.config.ts",
     "build": "electron-vite build -c electron-vite.config.ts",
     "preview": "electron-vite preview -c electron-vite.config.ts",
+    "import-semantic": "node scripts/import-semantic.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "rebuild": "node-gyp rebuild --target=$(node -e \"console.log(require('electron/package.json').version)\") --dist-url=https://electronjs.org/headers --runtime=electron --directory=../node_modules/better-sqlite3",

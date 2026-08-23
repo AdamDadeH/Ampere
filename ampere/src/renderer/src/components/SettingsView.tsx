@@ -20,15 +20,27 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
 }
 
+import { NavMonitor } from './NavMonitor'
+import { useDeveloperStore } from '../stores/developer'
+import { TripletPanel } from './TripletPanel'
+
 export function SettingsView(): React.JSX.Element {
+  const devEnabled = useDeveloperStore(s => s.enabled)
+  const devLoaded = useDeveloperStore(s => s.loaded)
+  const setDevEnabled = useDeveloperStore(s => s.setEnabled)
+  const loadDev = useDeveloperStore(s => s.load)
+  useEffect(() => { if (!devLoaded) void loadDev() }, [devLoaded, loadDev])
+
   const [stats, setStats] = useState<CacheStats | null>(null)
   const [limitGb, setLimitGb] = useState('')
-  const [busy, setBusy] = useState<null | 'apply' | 'evict'>(null)
+  const [busy, setBusy] = useState<null | 'apply' | 'evict' | 'import'>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [semanticCount, setSemanticCount] = useState<number | null>(null)
 
   const refresh = useCallback(async () => {
     const s = (await window.api.getCacheStats()) as CacheStats
     setStats(s)
+    setSemanticCount(await window.api.getSemanticCount())
     // Only seed the input when it's empty so we don't clobber what the user is typing.
     setLimitGb(prev => (prev === '' ? (s.maxSizeBytes / GB).toFixed(1) : prev))
   }, [])
@@ -67,6 +79,28 @@ export function SettingsView(): React.JSX.Element {
           ? `Evicted ${evicted} file${evicted === 1 ? '' : 's'}, freed ${formatBytes(freedBytes)}.`
           : 'Nothing to evict — cache is under budget.'
       )
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const importSemantic = async (): Promise<void> => {
+    setBusy('import')
+    setMessage(null)
+    try {
+      const report = await window.api.importSemanticIndex()
+      if (!report) {
+        setMessage('Import cancelled.')
+        return
+      }
+      await refresh()
+      const unmatched = report.unmatchedInVq > 0 ? `, ${report.unmatchedInVq} not in library` : ''
+      setMessage(
+        `Imported ${report.matched.toLocaleString()} of ${report.vqTracks.toLocaleString()} embeddings ` +
+          `(${report.numLevels}×${report.codebookSize} Semantic IDs, dim ${report.embeddingDim})${unmatched}.`
+      )
+    } catch (err) {
+      setMessage(`Import failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setBusy(null)
     }
@@ -148,6 +182,72 @@ export function SettingsView(): React.JSX.Element {
         </section>
 
         <section className="mb-8">
+          <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Semantic index</h2>
+          <p className="text-sm text-text-muted mb-3">
+            CLAP audio embeddings + RQ-VAE Semantic IDs from the standalone <span className="font-mono text-text-secondary">vq</span> pipeline.
+            Run <span className="font-mono text-text-secondary">vq/scripts/export_ampere.py</span> first, then import the generated
+            <span className="font-mono text-text-secondary"> ampere_index.sqlite</span>. Purely audio-derived — safe to rebuild anytime.
+          </p>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={importSemantic}
+              disabled={busy !== null}
+              className="px-4 py-2 bg-bg-tertiary hover:bg-bg-hover text-text-secondary rounded text-sm transition-colors cursor-pointer disabled:opacity-50"
+            >
+              {busy === 'import' ? 'Importing…' : 'Import semantic index…'}
+            </button>
+            <span className="text-sm text-text-muted">
+              {semanticCount === null
+                ? '—'
+                : semanticCount > 0
+                  ? `${semanticCount.toLocaleString()} tracks indexed`
+                  : 'Not yet imported'}
+            </span>
+          </div>
+        </section>
+
+        <section className="mb-8">
+          <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Developer</h2>
+          <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={devEnabled}
+              onChange={(e) => void setDevEnabled(e.target.checked)}
+              className="accent-[#ffaa00]"
+            />
+            Show navigation instrumentation
+          </label>
+          <p className="text-[11px] text-text-muted mt-2">
+            Measurement tools for tuning how tracks are chosen. The numbers are noisy until
+            a few hundred plays have accumulated, and the thresholds behind them are still
+            being worked out.
+          </p>
+        </section>
+
+        {devEnabled && (
+          <section className="mb-10">
+            <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Similarity check</h2>
+            <p className="text-sm text-text-muted mb-4">
+              Does the audio embedding hear similarity the way you do? Drift, Journey and Session
+              all navigate that space, so if it is skewed they are all built on it.
+            </p>
+            <TripletPanel />
+          </section>
+        )}
+
+        {devEnabled && (
+          <section className="mb-10">
+            <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Navigation</h2>
+            <p className="text-sm text-text-muted mb-4">
+              How each play mode performs, split by the kind of session it happened in —
+              skipping fast is correct when sampling and a failure when settled, so the two
+              are not pooled.
+            </p>
+            <NavMonitor />
+          </section>
+        )}
+
+        <section className="mb-10">
           <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Maintenance</h2>
           <button
             onClick={runEviction}

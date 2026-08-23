@@ -56,7 +56,8 @@ export const DEFAULT_UMAP_PARAMS: UMAPParams = {
 export async function projectToUMAP(
   features: { track_id: string; features_json: string }[],
   onProgress: (epoch: number, totalEpochs: number) => void,
-  params: UMAPParams = DEFAULT_UMAP_PARAMS
+  params: UMAPParams = DEFAULT_UMAP_PARAMS,
+  persist: (results: ProjectionResult[]) => Promise<void> = (r) => window.api.bulkSetUmapCoords(r)
 ): Promise<ProjectionResult[]> {
   if (features.length < 2) {
     // UMAP needs at least 2 points; place single point at origin
@@ -92,8 +93,8 @@ export async function projectToUMAP(
     z: params.nComponents === 3 ? embedding[i][2] : 0
   }))
 
-  // Persist to database
-  await window.api.bulkSetUmapCoords(results)
+  // Persist to database (Meyda → track_features, CLAP → track_semantic)
+  await persist(results)
 
   return results
 }

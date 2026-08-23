@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { getAttentionWeight } from './attention'
 import { buildShufflePermutation } from '../utils/shuffle'
+import { isNavMode, PlayMode } from '../riemann/modes'
+import { useNavigationStore } from './navigation'
 
 export interface Track {
   id: string
@@ -70,7 +72,14 @@ type ArtistViewMode = 'track' | 'album'
 
 interface LibraryState {
   // Library data
+  /** The currently displayed list — filtered by search, artist, or album view. */
   tracks: Track[]
+  /**
+   * The whole library, independent of any filter. Nav modes walk a graph over
+   * every track, so resolving a step against the filtered `tracks` would miss
+   * anything outside the current view and silently fall back to queue order.
+   */
+  libraryTracks: Track[]
   artists: ArtistInfo[]
   albumArtists: ArtistInfo[]
   albums: AlbumInfo[]
@@ -78,6 +87,12 @@ interface LibraryState {
 
   // Navigation
   currentView: View
+  /**
+   * UI surface the user last acted from — stamped onto every feedback event.
+   * Usually tracks `currentView`, but the compact window drives playback
+   * remotely from a different renderer, so it sets this explicitly.
+   */
+  activeSurface: string
   artistViewMode: ArtistViewMode
   selectedArtist: string | null
   selectedAlbum: string | null
@@ -92,6 +107,15 @@ interface LibraryState {
   currentTime: number
   duration: number
   seekTarget: number | null
+  /**
+   * The single active play strategy: queue orders ('linear' / 'random') or a
+   * graph-walking nav mode. Replaces the old shuffle-boolean-plus-driftNext
+   * pair, where precedence between the two was implicit.
+   */
+  playMode: PlayMode
+  /** Mode to restore when the random override is switched back off. */
+  modeBeforeRandom: PlayMode
+  /** Mirrors `playMode === 'random'`. Kept so PlayerBar and the compact window need no change. */
   shuffle: boolean
   shuffledIndices: number[]
   shufflePosition: number
@@ -108,6 +132,14 @@ interface LibraryState {
 
   // Cloud-first download state
   downloadingTrackId: string | null
+  /**
+   * Why the current track could not be played, or null.
+   *
+   * Playback failures used to end in `console.error` or in no branch at all,
+   * so a track that could not load simply stopped and looked like the player
+   * hanging. A failure the listener cannot see is a failure they cannot act on.
+   */
+  playbackError: { trackId: string; reason: string } | null
 
   // Navigation override — set by Riemann navigator for drift/walk modes
   driftNext: (() => void) | null
@@ -116,11 +148,12 @@ interface LibraryState {
   loadLibrary: () => Promise<void>
   selectFolder: () => Promise<void>
   setView: (view: View) => void
+  setActiveSurface: (surface: string) => void
   setArtistViewMode: (mode: ArtistViewMode) => void
   selectArtist: (artist: string) => void
   selectAlbum: (album: string, artist?: string) => void
   setSearchQuery: (query: string) => void
-  playTrack: (track: Track, trackList?: Track[], source?: string) => void
+  playTrack: (track: Track, trackList?: Track[], source?: string, context?: Record<string, unknown> | null) => void
   togglePlayPause: () => void
   nextTrack: (reason?: 'auto_advance' | 'manual_skip' | 'not_feeling_it' | 'like_not_now') => void
   prevTrack: () => void
@@ -128,6 +161,8 @@ interface LibraryState {
   setCurrentTime: (time: number) => void
   setDuration: (duration: number) => void
   seekTo: (time: number) => void
+  setPlayMode: (mode: PlayMode) => void
+  /** Quick override to random; toggling off returns to the previous mode. */
   toggleShuffle: () => void
   cycleRepeat: () => void
   stopPlayback: () => void
@@ -140,7 +175,11 @@ interface LibraryState {
   setDriftNext: (fn: (() => void) | null) => void
   getUpcomingTrackIds: (count: number) => string[]
   togglePin: (trackId: string) => Promise<void>
-  recordFeedback: (trackId: string, eventType: string, eventValue: number | null, source: string | null) => void
+  recordFeedback: (trackId: string, eventType: string, eventValue: number | null, source: string | null, context?: Record<string, unknown> | null) => void
+  /** Decide and prefetch the next track while this one plays. No-op off nav modes. */
+  schedulePrecompute: (currentTrackId: string) => void
+  reportPlaybackError: (trackId: string, reason: string) => void
+  clearPlaybackError: () => void
   lovingThis: () => void
   likeNotNow: () => void
   notFeelingIt: () => void
@@ -149,11 +188,13 @@ interface LibraryState {
 
 export const useLibraryStore = create<LibraryState>((set, get) => ({
   tracks: [],
+  libraryTracks: [],
   artists: [],
   albumArtists: [],
   albums: [],
   stats: null,
   currentView: 'all-tracks',
+  activeSurface: 'all-tracks',
   artistViewMode: 'album',
   selectedArtist: null,
   selectedAlbum: null,
@@ -166,6 +207,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   currentTime: 0,
   duration: 0,
   seekTarget: null,
+  playMode: 'linear',
+  modeBeforeRandom: 'linear',
   shuffle: false,
   shuffledIndices: [],
   shufflePosition: -1,
@@ -176,6 +219,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   scanProgress: null,
   isScanning: false,
   downloadingTrackId: null,
+  playbackError: null,
   driftNext: null,
 
   loadLibrary: async () => {
@@ -186,7 +230,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       window.api.getAlbums() as Promise<AlbumInfo[]>,
       window.api.getLibraryStats() as Promise<LibraryStats>
     ])
-    set({ tracks, artists, albumArtists, albums, stats })
+    set({ tracks, libraryTracks: tracks, artists, albumArtists, albums, stats })
   },
 
   selectFolder: async () => {
@@ -194,15 +238,17 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     await window.api.selectFolder()
   },
 
+  setActiveSurface: (surface) => set({ activeSurface: surface }),
+
   setView: (view) => {
-    set({ currentView: view, selectedArtist: null, selectedAlbum: null })
+    set({ currentView: view, activeSurface: view, selectedArtist: null, selectedAlbum: null })
     if (view === 'all-tracks') {
       get().loadLibrary()
     }
   },
 
   setArtistViewMode: (mode) => {
-    set({ artistViewMode: mode, selectedArtist: null, currentView: 'all-tracks' })
+    set({ artistViewMode: mode, selectedArtist: null, currentView: 'all-tracks', activeSurface: 'all-tracks' })
   },
 
   selectArtist: async (artist) => {
@@ -218,6 +264,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }
     set({
       currentView: 'artist-detail',
+      activeSurface: 'artist-detail',
       selectedArtist: artist,
       selectedAlbum: null,
       tracks,
@@ -229,6 +276,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     const tracks = await window.api.getTracks({ album, artist }) as Track[]
     set({
       currentView: 'album-detail',
+      activeSurface: 'album-detail',
       selectedAlbum: album,
       tracks
     })
@@ -244,7 +292,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }
   },
 
-  playTrack: (track, trackList, source) => {
+  playTrack: (track, trackList, source, context) => {
     const list = trackList || get().tracks
     const index = list.findIndex(t => t.id === track.id)
     const seqIndex = index >= 0 ? index : 0
@@ -284,7 +332,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         queueIndex: seqIndex
       })
     }
-    get().recordFeedback(track.id, 'track_started', null, source || 'intentional_select')
+    get().recordFeedback(track.id, 'track_started', null, source || 'intentional_select', context)
+    get().schedulePrecompute(track.id)
   },
 
   togglePlayPause: () => {
@@ -294,21 +343,88 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   nextTrack: (reason) => {
     const { queue, queueIndex, shuffle, shuffledIndices, shufflePosition, repeatMode, driftNext, currentTrack, currentTime, duration } = get()
 
-    // Record feedback for the outgoing track
+    // Record feedback for the outgoing track.
+    //
+    // Null, not zero, when the duration is unknown. Some files report no
+    // duration — headerless VBR, or a failed sync that left an allocated but
+    // empty file — and scoring those as 0% played logged them as rejections
+    // whatever the listener did. An unknown fraction is unknown; inventing a
+    // value would put fabricated dislikes into the training data.
+    const completion = duration > 0 ? currentTime / duration : null
     if (currentTrack) {
       if (reason === 'auto_advance') {
-        const completion = duration > 0 ? currentTime / duration : 0
         get().recordFeedback(currentTrack.id, 'track_completed', completion, null)
       } else if (reason) {
-        const completion = duration > 0 ? currentTime / duration : 0
         get().recordFeedback(currentTrack.id, 'track_skipped', completion, null)
       }
     }
 
+    // Escape hatch for custom navigation registered from outside the registry.
     if (driftNext) {
       driftNext()
       return
     }
+
+    // Graph-walking modes choose from the nav registry rather than the queue.
+    const { playMode } = get()
+    if (isNavMode(playMode) && currentTrack) {
+      const nav = useNavigationStore.getState()
+      // inferred_rating is the global model's output, 0–5; the session scorer
+      // wants [0,1]. Unrated tracks sit at the midpoint rather than at zero,
+      // so "no prediction" doesn't read as "disliked".
+      // A walk must never land on a file with no audio in it — the player
+      // stalls rather than failing cleanly, so the whole session stops.
+      const unplayable = new Set(
+        get().libraryTracks.filter(t => t.sync_status === 'unplayable').map(t => t.id)
+      )
+      const ratingById = new Map(get().libraryTracks.map(t => [t.id, t.inferred_rating]))
+      const globalPreference = (trackId: string): number => {
+        const r = ratingById.get(trackId)
+        return r == null ? 0.5 : Math.max(0, Math.min(1, r / 5))
+      }
+
+      // Durable memory of what has been heard. `visited` only spans one walk
+      // and resets on every mode switch, so without last_played the same
+      // tracks resurface as soon as you change modes or restart.
+      const lastPlayedById = new Map(get().libraryTracks.map(t => [t.id, t.last_played]))
+      const lastPlayedAt = (trackId: string): number | null => {
+        const raw = lastPlayedById.get(trackId)
+        if (!raw) return null
+        // SQLite writes UTC as 'YYYY-MM-DD HH:MM:SS' with no zone; Date would
+        // read that as local time and shift every value by the UTC offset.
+        const t = Date.parse(`${raw.replace(' ', 'T')}Z`)
+        return Number.isNaN(t) ? null : t
+      }
+
+      // Which branch actually happened, judged the same way sessionSignals
+      // judges it, so the precomputed context matches what gets logged. With
+      // an unknown fraction, reaching the end of the track is the only
+      // evidence available.
+      const sustained = reason === 'auto_advance' || (completion !== null && completion >= 0.7)
+
+      // Prefer the step decided during playback: its audio has been prefetched,
+      // which is the multi-second cost. Falls back to deciding now.
+      const step =
+        nav.consumePending(currentTrack.id, playMode, sustained) ??
+        nav.next(playMode, currentTrack.id, globalPreference, lastPlayedAt)
+      // Resolve against the full library, not the filtered view.
+      const pool = get().libraryTracks.length ? get().libraryTracks : get().tracks
+      const stepTrack = step ? pool.find(t => t.id === step.trackId) : undefined
+      if (step && stepTrack && !unplayable.has(step.trackId)) {
+        get().playTrack(stepTrack, pool, step.source, step.context)
+        // The outgoing track's outcome was recorded moments ago; pick it up so
+        // the next step sees it. Async, so signals lag by at most one step.
+        void nav.refreshSession()
+        return
+      }
+      // Falling back to queue order is indistinguishable from the mode simply
+      // working, so say why — otherwise a broken walk looks like linear play.
+      console.warn(
+        `[nav] ${playMode} could not step from ${currentTrack.id}; falling back to queue order.`,
+        step ? 'Chosen track is not in the library list.' : nav.data ? 'No candidate from the graph.' : 'Graph not loaded yet.'
+      )
+    }
+
     if (queue.length === 0) return
 
     let nextQueueIndex: number
@@ -350,6 +466,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     // Record track_started for incoming track
     const incomingSource = shuffle ? 'shuffle' : 'auto_advance'
     get().recordFeedback(incoming.id, 'track_started', null, incomingSource)
+    get().schedulePrecompute(incoming.id)
   },
 
   prevTrack: () => {
@@ -399,19 +516,39 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     set({ seekTarget: time })
   },
 
+  setPlayMode: (mode) => {
+    const { queue, queueIndex, currentTrack } = get()
+
+    if (mode === 'random') {
+      // Generate the permutation with the current track at position 0.
+      const perm = queue.length > 0
+        ? buildShufflePermutation(queue.length, queueIndex, queue.map(t => t.id))
+        : []
+      set({ playMode: 'random', shuffle: true, shuffledIndices: perm, shufflePosition: perm.length ? 0 : -1 })
+      return
+    }
+
+    // Leaving random — the permutation is meaningless to the other modes.
+    set({ playMode: mode, shuffle: false, shuffledIndices: [], shufflePosition: -1 })
+
+    // A graph walk starts from wherever playback currently is, and needs its
+    // graph. Both are no-ops if already done.
+    if (isNavMode(mode)) {
+      void useNavigationStore.getState().ensureLoaded()
+      void useNavigationStore.getState().refreshSession()
+      if (currentTrack) useNavigationStore.getState().resetWalk(currentTrack.id)
+    }
+  },
+
   toggleShuffle: () => {
-    const { shuffle, queue, queueIndex } = get()
-    if (!shuffle) {
-      // Turning ON — generate permutation with current track at position 0
-      if (queue.length > 0) {
-        const perm = buildShufflePermutation(queue.length, queueIndex, queue.map(t => t.id))
-        set({ shuffle: true, shuffledIndices: perm, shufflePosition: 0 })
-      } else {
-        set({ shuffle: true, shuffledIndices: [], shufflePosition: -1 })
-      }
+    const { playMode, modeBeforeRandom } = get()
+    if (playMode === 'random') {
+      // Return to whatever was running before, rather than resetting to linear —
+      // random is an override, not a destination.
+      get().setPlayMode(modeBeforeRandom)
     } else {
-      // Turning OFF — clear permutation
-      set({ shuffle: false, shuffledIndices: [], shufflePosition: -1 })
+      set({ modeBeforeRandom: playMode })
+      get().setPlayMode('random')
     }
   },
 
@@ -479,8 +616,12 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   setDriftNext: (fn) => set({ driftNext: fn }),
 
   getUpcomingTrackIds: (count) => {
-    const { queue, queueIndex, shuffle, shuffledIndices, shufflePosition, driftNext } = get()
+    const { queue, queueIndex, shuffle, shuffledIndices, shufflePosition, driftNext, playMode } = get()
     if (driftNext || queue.length === 0) return []
+    // A graph walk's next track has nothing to do with queue order, so
+    // prefetching from it would warm tracks that will not play. The walk
+    // prefetches its own precomputed branches instead — see schedulePrecompute.
+    if (isNavMode(playMode)) return []
 
     const ids: string[] = []
     if (shuffle) {
@@ -520,9 +661,35 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }))
   },
 
-  recordFeedback: (trackId, eventType, eventValue, source) => {
+  reportPlaybackError: (trackId, reason) => set({ playbackError: { trackId, reason }, isPlaying: false }),
+  clearPlaybackError: () => set({ playbackError: null }),
+
+  schedulePrecompute: (currentTrackId) => {
+    const { playMode, libraryTracks } = get()
+    if (!isNavMode(playMode) || libraryTracks.length === 0) return
+
+    const ratingById = new Map(libraryTracks.map(t => [t.id, t.inferred_rating]))
+    const lastPlayedById = new Map(libraryTracks.map(t => [t.id, t.last_played]))
+    const globalPreference = (trackId: string): number => {
+      const r = ratingById.get(trackId)
+      return r == null ? 0.5 : Math.max(0, Math.min(1, r / 5))
+    }
+    const lastPlayedAt = (trackId: string): number | null => {
+      const raw = lastPlayedById.get(trackId)
+      if (!raw) return null
+      const t = Date.parse(`${raw.replace(' ', 'T')}Z`)
+      return Number.isNaN(t) ? null : t
+    }
+    useNavigationStore.getState().precompute(playMode, currentTrackId, globalPreference, lastPlayedAt)
+  },
+
+  recordFeedback: (trackId, eventType, eventValue, source, context) => {
     const weight = getAttentionWeight()
-    window.api.recordFeedback(trackId, eventType, eventValue, weight, source).catch(console.error)
+    const { activeSurface } = get()
+    const contextJson = context ? JSON.stringify(context) : null
+    window.api
+      .recordFeedback(trackId, eventType, eventValue, weight, source, activeSurface, contextJson)
+      .catch(console.error)
   },
 
   lovingThis: () => {

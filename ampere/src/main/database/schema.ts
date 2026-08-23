@@ -24,8 +24,17 @@ CREATE TABLE IF NOT EXISTS tracks (
   date_added TEXT NOT NULL DEFAULT (datetime('now')),
   date_modified TEXT NOT NULL DEFAULT (datetime('now')),
   sync_status TEXT NOT NULL DEFAULT 'local',
-  cloud_path TEXT
+  cloud_path TEXT,
+  -- Identity derived from the audio payload with tags excluded. The embedded
+  -- AMPERE_ID lives in a tag that third-party taggers also own and rewrite;
+  -- when that happened, thousands of tracks lost their identity at once and
+  -- became rows pointing at files that had moved. Audio bytes do not change
+  -- when tags do, so this survives retagging, renaming and reorganisation —
+  -- and gives formats we never managed to tag an identity at all.
+  content_hash TEXT,
+  content_bytes INTEGER
 );
+CREATE INDEX IF NOT EXISTS idx_tracks_content_hash ON tracks(content_hash);
 
 CREATE TABLE IF NOT EXISTS playlists (
   id TEXT PRIMARY KEY,
@@ -93,6 +102,39 @@ CREATE TABLE IF NOT EXISTS track_features (
   FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
 );
 
+-- Derived audio-feature table from the standalone vq pipeline (CLAP embeddings
+-- + RQ-VAE Semantic IDs). Purely audio-derived and fully recomputable by
+-- re-running vq's export + the importer — never load-bearing, never user data.
+-- clap = raw little-endian float32 bytes (embedding_dim recorded in semantic_meta).
+CREATE TABLE IF NOT EXISTS track_semantic (
+  track_id    TEXT PRIMARY KEY,
+  clap        BLOB NOT NULL,
+  sid_0       INTEGER NOT NULL,
+  sid_1       INTEGER NOT NULL,
+  sid_2       INTEGER NOT NULL,
+  umap_x      REAL,
+  umap_y      REAL,
+  umap_z      REAL,
+  computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_track_semantic_sid ON track_semantic(sid_0, sid_1, sid_2);
+
+-- Human-readable labels for each (level, code), imported from vq's code_names.
+CREATE TABLE IF NOT EXISTS semantic_code_names (
+  level INTEGER NOT NULL,
+  code  INTEGER NOT NULL,
+  name  TEXT NOT NULL,
+  alts  TEXT NOT NULL,
+  PRIMARY KEY (level, code)
+);
+
+-- Provenance/config for the semantic index (embedding_dim, num_levels, etc.).
+CREATE TABLE IF NOT EXISTS semantic_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS storage_sources (
   id TEXT PRIMARY KEY,
   type TEXT NOT NULL,
@@ -109,11 +151,73 @@ CREATE TABLE IF NOT EXISTS track_feedback (
   event_value REAL,
   attention_weight REAL NOT NULL DEFAULT 1.0,
   source TEXT,
+  -- UI surface the play decision was made from (main list, riemann, compact...).
+  -- Not derivable after the fact: nav modes like drift used to imply the 3D
+  -- view, but once a mode runs on more than one surface that inference breaks.
+  -- Needed to compare navigation modes without confounding them with context.
+  surface TEXT,
+  -- Feature values the policy actually used when it chose this track, as JSON.
+  -- Recorded rather than reconstructed: once a feature drives selection, any
+  -- later reconstruction has to reproduce exactly what the scorer saw, and it
+  -- silently stops matching the moment a definition changes. Free-form because
+  -- the feature set is expected to keep moving.
+  context_json TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_track ON track_feedback(track_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_created ON track_feedback(created_at);
+
+-- Which index artifacts were active when, so per-mode performance can be
+-- scoped to a comparable period.
+--
+-- Drift and session are functions of the CLAP model; journey additionally
+-- depends on the RQ-VAE codebook. Change either and the same mode becomes a
+-- different mode, so pooling its statistics across the change is invalid.
+--
+-- A log rather than a column on track_feedback: these change rarely, so an
+-- event's version is whichever row was active at its created_at. That also
+-- means history recorded before this table existed is still attributable.
+--
+-- The UMAP projection is deliberately absent. It is unseeded and refits
+-- whenever the library grows, but no navigation mode depends on it any more —
+-- it positions the 3D view and nothing else.
+CREATE TABLE IF NOT EXISTS index_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  embedding_version TEXT NOT NULL,
+  codebook_version TEXT NOT NULL,
+  n_tracks INTEGER,
+  activated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_index_versions_activated ON index_versions(activated_at);
+
+-- Elicited similarity judgements: "is the anchor closer to A or to B?"
+--
+-- Tests an assumption the navigation rests on but has never checked — that
+-- cosine distance in CLAP space matches perceived musical similarity. Drift
+-- picks nearest neighbours in that space, session affinity is cosine against a
+-- direction, and journey walks IDs derived from it. If the metric is skewed,
+-- no amount of preference modelling helps, because candidate generation
+-- happens upstream of preference.
+--
+-- The model's own prediction is stored alongside the answer so agreement is
+-- measurable after the fact, and embedding_version scopes it — a different
+-- CLAP checkpoint is a different space and its judgements do not pool.
+CREATE TABLE IF NOT EXISTS similarity_triplets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  anchor_id TEXT NOT NULL,
+  a_id TEXT NOT NULL,
+  b_id TEXT NOT NULL,
+  -- 'a', 'b', or 'unsure'. Unsure is kept: a genuine tie is information about
+  -- the metric, and discarding it would bias the agreement estimate.
+  chosen TEXT NOT NULL,
+  cos_a REAL NOT NULL,
+  cos_b REAL NOT NULL,
+  embedding_version TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (anchor_id) REFERENCES tracks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_triplets_created ON similarity_triplets(created_at);
 
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,

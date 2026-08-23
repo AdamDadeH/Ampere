@@ -6,6 +6,7 @@ import { app } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
 import { TrackUpsertData } from '../database'
 import { ensureEmbeddedId } from './tagger'
+import { computeContentId } from './content-id'
 import { parseArtists } from './artist-parser'
 import type { MetadataExtractor, SourceContext } from './index'
 import { isFileMaterialized, isProtonDrivePath } from '../storage/proton-drive'
@@ -25,7 +26,10 @@ export class MusicMetadataExtractor implements MetadataExtractor {
     track: TrackUpsertData
     entities: { type: string; names: string[] }[]
   }> {
-    const metadata = await parseFile(filePath)
+    // duration:true makes music-metadata scan frames when the header carries no
+    // duration, which headerless VBR MP3s do not. Costs nothing on files that
+    // do — it only falls back to scanning when there is no other way to know.
+    const metadata = await parseFile(filePath, { duration: true })
     const { common, format } = metadata
 
     let artworkPath: string | null = null
@@ -70,9 +74,19 @@ export class MusicMetadataExtractor implements MetadataExtractor {
       sample_rate: format.sampleRate || null,
       codec: format.codec || null,
       artwork_path: artworkPath,
-      sync_status: this.resolveSyncStatus(filePath, source),
+      sync_status: this.resolveSyncStatus(filePath, source, format),
       cloud_path: this.resolveCloudPath(filePath, source),
-      source_id: source?.sourceId ?? null
+      source_id: source?.sourceId ?? null,
+      // Identity from the audio itself, so this file stays recognisable
+      // however it is later renamed, moved or retagged.
+      content_hash: null as string | null,
+      content_bytes: null as number | null
+    }
+
+    const contentId = computeContentId(filePath)
+    if (contentId) {
+      track.content_hash = contentId.hash
+      track.content_bytes = contentId.payloadBytes
     }
 
     // Try to read or write the embedded AMPERE_ID
@@ -90,11 +104,28 @@ export class MusicMetadataExtractor implements MetadataExtractor {
     }
   }
 
-  private resolveSyncStatus(filePath: string, source?: SourceContext): string {
-    if (source?.sourceType === 'proton-drive' || isProtonDrivePath(filePath)) {
-      return isFileMaterialized(filePath) ? 'cached' : 'cloud-only'
-    }
-    return 'local'
+  private resolveSyncStatus(
+    filePath: string,
+    source?: SourceContext,
+    format?: { container?: string; duration?: number }
+  ): string {
+    const isCloud = source?.sourceType === 'proton-drive' || isProtonDrivePath(filePath)
+    if (!isCloud) return 'local'
+
+    // isFileMaterialized checks allocation, not content: a file a failed sync
+    // gave disk blocks but never filled looks identical to a real one — not
+    // SF_DATALESS, not sparse, full size, and entirely zeros inside. Parsing
+    // knows better, and no recognisable container means no audio was found.
+    //
+    // Not 'cloud-only': reading such a file through to the end returns zeros
+    // and does not trigger materialisation, so the bytes are not merely
+    // absent, they are not coming. Marking it fetchable would retry a download
+    // forever and stall the player every time. 'unplayable' says what is true
+    // and lets playback and navigation skip it.
+    const parsedNoAudio = format != null && !format.container && !(format.duration && format.duration > 0)
+    if (parsedNoAudio) return 'unplayable'
+
+    return isFileMaterialized(filePath) ? 'cached' : 'cloud-only'
   }
 
   private resolveCloudPath(filePath: string, source?: SourceContext): string | null {

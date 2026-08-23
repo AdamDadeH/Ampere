@@ -1,9 +1,17 @@
 import Database from 'better-sqlite3'
 import { app } from 'electron'
 import { join } from 'path'
-import { mkdirSync } from 'fs'
+import { mkdirSync, existsSync } from 'fs'
 import { SCHEMA_SQL, SCHEMA_VERSION } from './schema'
+import { sessionize, currentSession, SESSION_GAP_MS } from './sessions'
+import {
+  pairOutcomes, summarize, summarizeByKind, completionHistogram, onSurface,
+  type ModePerformance, type SessionKind
+} from './nav-performance'
+import { sampleTriplet, agreement, type TripletAgreement } from './triplets'
+import { resolveTrackIdentity } from './track-identity'
 import { parseArtists, isBrowsableArtist } from '../scanner/artist-parser'
+import { importSemanticIndex, type SemanticImportReport } from './clap-import'
 
 export interface Track {
   id: string
@@ -33,6 +41,8 @@ export interface Track {
   cloud_path: string | null
   last_accessed: string | null
   pinned: number
+  content_hash: string | null
+  content_bytes: number | null
   source_id: string | null
   inferred_rating: number | null
 }
@@ -58,6 +68,20 @@ export interface LibraryStats {
   total_album_artists: number
   total_albums: number
   total_duration: number
+}
+
+/** A row of `track_feedback`. `surface` is null for events logged before it existed. */
+export interface FeedbackRow {
+  id: number
+  track_id: string
+  event_type: string
+  event_value: number | null
+  attention_weight: number
+  source: string | null
+  surface: string | null
+  /** Feature values the policy used at decision time, as JSON. Null for plays it did not choose. */
+  context_json: string | null
+  created_at: string
 }
 
 export type TrackUpsertData = Omit<Track, 'play_count' | 'last_played' | 'rating' | 'date_added' | 'date_modified' | 'last_accessed' | 'pinned'>
@@ -102,6 +126,20 @@ export class LibraryDatabase {
     addColumnSafe('ALTER TABLE tracks ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
     addColumnSafe('ALTER TABLE tracks ADD COLUMN source_id TEXT')
     addColumnSafe('ALTER TABLE tracks ADD COLUMN inferred_rating REAL DEFAULT NULL')
+
+    // Content-derived identity — see schema.ts.
+    addColumnSafe('ALTER TABLE tracks ADD COLUMN content_hash TEXT')
+    addColumnSafe('ALTER TABLE tracks ADD COLUMN content_bytes INTEGER')
+    try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_content_hash ON tracks(content_hash)') } catch { /* exists */ }
+
+    // Which UI surface a feedback event came from — see schema.ts.
+    addColumnSafe('ALTER TABLE track_feedback ADD COLUMN surface TEXT')
+    addColumnSafe('ALTER TABLE track_feedback ADD COLUMN context_json TEXT')
+
+    // UMAP coords for the CLAP map — added if track_semantic predates them.
+    addColumnSafe('ALTER TABLE track_semantic ADD COLUMN umap_x REAL')
+    addColumnSafe('ALTER TABLE track_semantic ADD COLUMN umap_y REAL')
+    addColumnSafe('ALTER TABLE track_semantic ADD COLUMN umap_z REAL')
   }
 
   private refreshDerivedTables(): void {
@@ -115,6 +153,7 @@ export class LibraryDatabase {
     }
 
     this.backfillIfNeeded()
+    this.backfillIndexVersion()
   }
 
   /**
@@ -122,44 +161,36 @@ export class LibraryDatabase {
    * then falls back to file_path. Updates metadata and path on match.
    */
   upsertTrack(track: TrackUpsertData): string {
-    // Strategy 1: Match by embedded_id (strongest — survives rename/move)
-    if (track.embedded_id) {
-      const existing = this.db.prepare(
-        'SELECT id, play_count, rating, last_played, date_added FROM tracks WHERE embedded_id = ?'
-      ).get(track.embedded_id) as Pick<Track, 'id' | 'play_count' | 'rating' | 'last_played' | 'date_added'> | undefined
-
-      if (existing) {
-        // Update everything (including file_path which may have changed)
-        this.db.prepare(`
-          UPDATE tracks SET
-            file_path = ?, file_name = ?, file_size = ?,
-            title = ?, artist = ?, album = ?, album_artist = ?,
-            genre = ?, year = ?, track_number = ?, disc_number = ?,
-            duration = ?, bitrate = ?, sample_rate = ?, codec = ?,
-            artwork_path = ?, sync_status = ?, cloud_path = ?, source_id = ?,
-            date_modified = datetime('now')
-          WHERE id = ?
-        `).run(
-          track.file_path, track.file_name, track.file_size,
-          track.title, track.artist, track.album, track.album_artist,
-          track.genre, track.year, track.track_number, track.disc_number,
-          track.duration, track.bitrate, track.sample_rate, track.codec,
-          track.artwork_path, track.sync_status, track.cloud_path, track.source_id,
-          existing.id
-        )
-        return existing.id
+    // Which existing row, if any, this file is. Rules and their ordering live
+    // in track-identity.ts, where they are tested; this only supplies lookups.
+    const match = resolveTrackIdentity(
+      { embeddedId: track.embedded_id, filePath: track.file_path, contentHash: track.content_hash },
+      {
+        byEmbeddedId: (id) => (this.db.prepare('SELECT id FROM tracks WHERE embedded_id = ?').get(id) as { id: string } | undefined)?.id,
+        byFilePath: (p) => (this.db.prepare('SELECT id FROM tracks WHERE file_path = ?').get(p) as { id: string } | undefined)?.id,
+        // Only answers when the audio identifies exactly one row. Libraries
+        // contain genuine duplicates — the same recording on an album and a
+        // compilation — and picking one arbitrarily would rewrite the wrong
+        // track's path and misattribute its ratings. Ambiguous is not identity.
+        byContentHash: (h) => {
+          const rows = this.db.prepare('SELECT id FROM tracks WHERE content_hash = ? LIMIT 2').all(h) as { id: string }[]
+          return rows.length === 1 ? rows[0].id : undefined
+        },
+        currentPathOf: (trackId) => (this.db.prepare('SELECT file_path FROM tracks WHERE id = ?').get(trackId) as { file_path: string } | undefined)?.file_path,
+        fileExists: (p) => existsSync(p)
       }
-    }
+    )
 
-    // Strategy 2: Match by file_path (fallback for files without embedded ID)
-    const existingByPath = this.db.prepare(
-      'SELECT id FROM tracks WHERE file_path = ?'
-    ).get(track.file_path) as { id: string } | undefined
-
-    if (existingByPath) {
+    if (match.trackId) {
+      // Everything the scan observed is refreshed, including the path and the
+      // identity columns — a file found by its audio may be carrying a new
+      // embedded id, or none at all, and the row should record what is true.
       this.db.prepare(`
         UPDATE tracks SET
-          embedded_id = ?, file_name = ?, file_size = ?,
+          embedded_id = COALESCE(?, embedded_id),
+          content_hash = COALESCE(?, content_hash),
+          content_bytes = COALESCE(?, content_bytes),
+          file_path = ?, file_name = ?, file_size = ?,
           title = ?, artist = ?, album = ?, album_artist = ?,
           genre = ?, year = ?, track_number = ?, disc_number = ?,
           duration = ?, bitrate = ?, sample_rate = ?, codec = ?,
@@ -167,22 +198,23 @@ export class LibraryDatabase {
           date_modified = datetime('now')
         WHERE id = ?
       `).run(
-        track.embedded_id, track.file_name, track.file_size,
+        track.embedded_id, track.content_hash ?? null, track.content_bytes ?? null,
+        track.file_path, track.file_name, track.file_size,
         track.title, track.artist, track.album, track.album_artist,
         track.genre, track.year, track.track_number, track.disc_number,
         track.duration, track.bitrate, track.sample_rate, track.codec,
         track.artwork_path, track.sync_status, track.cloud_path, track.source_id,
-        existingByPath.id
+        match.trackId
       )
-      return existingByPath.id
+      return match.trackId
     }
 
-    // Strategy 3: New track — insert
+    // Nothing matched: genuinely new audio.
     this.db.prepare(`
-      INSERT INTO tracks (id, embedded_id, file_path, file_name, file_size,
+      INSERT INTO tracks (id, embedded_id, content_hash, content_bytes, file_path, file_name, file_size,
         title, artist, album, album_artist, genre, year, track_number, disc_number,
         duration, bitrate, sample_rate, codec, artwork_path, sync_status, cloud_path, source_id)
-      VALUES (@id, @embedded_id, @file_path, @file_name, @file_size,
+      VALUES (@id, @embedded_id, @content_hash, @content_bytes, @file_path, @file_name, @file_size,
         @title, @artist, @album, @album_artist, @genre, @year, @track_number, @disc_number,
         @duration, @bitrate, @sample_rate, @codec, @artwork_path, @sync_status, @cloud_path, @source_id)
     `).run(track)
@@ -530,6 +562,110 @@ export class LibraryDatabase {
     return row.count
   }
 
+  // --- Semantic index (CLAP embeddings + RQ-VAE Semantic IDs from vq) ---
+
+  /** Import the standalone vq index, joining by file_path. Derived data only. */
+  importSemanticIndex(vqDbPath: string): SemanticImportReport {
+    const report = importSemanticIndex(this.db, vqDbPath)
+
+    // Stamp the artifacts this import brought in. Navigation behaviour is a
+    // function of them, so without this the log cannot tell whether a change
+    // in a mode's performance came from the mode or from a new index.
+    const meta = new Map(
+      (this.db.prepare('SELECT key, value FROM semantic_meta').all() as { key: string; value: string }[])
+        .map(m => [m.key, m.value])
+    )
+    const embedding = meta.get('clap_model')
+    const codebook = meta.get('source_model')
+    if (embedding && codebook) {
+      this.recordIndexVersion(embedding, codebook, report.matched ?? null)
+    }
+
+    return report
+  }
+
+  getSemanticCount(): number {
+    const row = this.db.prepare('SELECT COUNT(*) as count FROM track_semantic').get() as { count: number }
+    return row.count
+  }
+
+  /**
+   * CLAP feature vectors for every track that has one, decoded from the raw
+   * float32 BLOB into a JSON array — same shape `projectToUMAP` consumes for the
+   * Meyda vectors, so the navigator can project from either source.
+   */
+  getSemanticFeatures(): { track_id: string; features_json: string; sid_0: number; sid_1: number; sid_2: number }[] {
+    const rows = this.db.prepare(
+      'SELECT track_id, clap, sid_0, sid_1, sid_2 FROM track_semantic'
+    ).all() as { track_id: string; clap: Buffer; sid_0: number; sid_1: number; sid_2: number }[]
+    return rows.map((r) => {
+      const f = new Float32Array(r.clap.buffer, r.clap.byteOffset, r.clap.byteLength / 4)
+      return {
+        track_id: r.track_id,
+        features_json: JSON.stringify(Array.from(f)),
+        sid_0: r.sid_0,
+        sid_1: r.sid_1,
+        sid_2: r.sid_2
+      }
+    })
+  }
+
+  getSemanticCodeNames(): { level: number; code: number; name: string; alts: string }[] {
+    return this.db.prepare(
+      'SELECT level, code, name, alts FROM semantic_code_names ORDER BY level, code'
+    ).all() as { level: number; code: number; name: string; alts: string }[]
+  }
+
+  bulkSetSemanticUmapCoords(coords: { trackId: string; x: number; y: number; z: number }[]): void {
+    const stmt = this.db.prepare(
+      'UPDATE track_semantic SET umap_x = ?, umap_y = ?, umap_z = ? WHERE track_id = ?'
+    )
+    const transaction = this.db.transaction((items: typeof coords) => {
+      for (const { trackId, x, y, z } of items) {
+        stmt.run(x, y, z, trackId)
+      }
+    })
+    transaction(coords)
+  }
+
+  /** CLAP map nodes that already have UMAP coords, plus their Semantic IDs. */
+  getSemanticFeaturesWithCoords(): {
+    track_id: string
+    features_json: string
+    umap_x: number
+    umap_y: number
+    umap_z: number
+    sid_0: number
+    sid_1: number
+    sid_2: number
+  }[] {
+    const rows = this.db.prepare(
+      'SELECT track_id, clap, umap_x, umap_y, umap_z, sid_0, sid_1, sid_2 FROM track_semantic WHERE umap_x IS NOT NULL'
+    ).all() as {
+      track_id: string
+      clap: Buffer
+      umap_x: number
+      umap_y: number
+      umap_z: number
+      sid_0: number
+      sid_1: number
+      sid_2: number
+    }[]
+    return rows.map((r) => {
+      const f = new Float32Array(r.clap.buffer, r.clap.byteOffset, r.clap.byteLength / 4)
+      return {
+        track_id: r.track_id,
+        features_json: JSON.stringify(Array.from(f)),
+        umap_x: r.umap_x,
+        umap_y: r.umap_y,
+        umap_z: r.umap_z,
+        sid_0: r.sid_0,
+        sid_1: r.sid_1,
+        sid_2: r.sid_2
+      }
+    })
+  }
+
   // --- Storage Sources ---
 
   addStorageSource(source: { id: string; type: string; root_path: string; label?: string; proton_email?: string }): void {
@@ -650,16 +786,218 @@ export class LibraryDatabase {
 
   // --- Feedback ---
 
-  recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null): void {
+  recordFeedback(
+    trackId: string, eventType: string, eventValue: number | null,
+    attentionWeight: number, source: string | null,
+    surface: string | null = null, contextJson: string | null = null
+  ): void {
     this.db.prepare(
-      'INSERT INTO track_feedback (track_id, event_type, event_value, attention_weight, source) VALUES (?, ?, ?, ?, ?)'
-    ).run(trackId, eventType, eventValue, attentionWeight, source)
+      'INSERT INTO track_feedback (track_id, event_type, event_value, attention_weight, source, surface, context_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(trackId, eventType, eventValue, attentionWeight, source, surface, contextJson)
   }
 
-  getTrackFeedback(trackId: string): { id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; created_at: string }[] {
+  getTrackFeedback(trackId: string): FeedbackRow[] {
     return this.db.prepare(
       'SELECT * FROM track_feedback WHERE track_id = ? ORDER BY created_at DESC'
-    ).all(trackId) as { id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; created_at: string }[]
+    ).all(trackId) as FeedbackRow[]
+  }
+
+  /**
+   * Append an index version if it differs from the current head.
+   *
+   * Called after a semantic import. Idempotent: re-importing identical
+   * artifacts does not create a new version, so the log records genuine
+   * changes rather than every run.
+   */
+  recordIndexVersion(embeddingVersion: string, codebookVersion: string, nTracks: number | null): void {
+    const head = this.db.prepare(
+      'SELECT embedding_version, codebook_version FROM index_versions ORDER BY id DESC LIMIT 1'
+    ).get() as { embedding_version: string; codebook_version: string } | undefined
+
+    if (head && head.embedding_version === embeddingVersion && head.codebook_version === codebookVersion) return
+
+    this.db.prepare(
+      'INSERT INTO index_versions (embedding_version, codebook_version, n_tracks) VALUES (?, ?, ?)'
+    ).run(embeddingVersion, codebookVersion, nTracks)
+  }
+
+  getIndexVersions(): { id: number; embedding_version: string; codebook_version: string; n_tracks: number | null; activated_at: string }[] {
+    return this.db.prepare(
+      'SELECT * FROM index_versions ORDER BY activated_at ASC'
+    ).all() as { id: number; embedding_version: string; codebook_version: string; n_tracks: number | null; activated_at: string }[]
+  }
+
+  /**
+   * Give existing history a version to belong to.
+   *
+   * `semantic_meta` already records which models produced the current index,
+   * but not when they became active. Backdating the first row to the oldest
+   * embedding means every event ever logged falls inside a known version
+   * rather than being unattributable.
+   */
+  private backfillIndexVersion(): void {
+    const existing = this.db.prepare('SELECT COUNT(*) c FROM index_versions').get() as { c: number }
+    if (existing.c > 0) return
+
+    const meta = this.db.prepare('SELECT key, value FROM semantic_meta').all() as { key: string; value: string }[]
+    if (meta.length === 0) return
+    const byKey = new Map(meta.map(m => [m.key, m.value]))
+    const embedding = byKey.get('clap_model')
+    const codebook = byKey.get('source_model')
+    if (!embedding || !codebook) return
+
+    const oldest = this.db.prepare(
+      'SELECT MIN(computed_at) t FROM track_semantic'
+    ).get() as { t: string | null }
+
+    this.db.prepare(
+      'INSERT INTO index_versions (embedding_version, codebook_version, n_tracks, activated_at) VALUES (?, ?, ?, ?)'
+    ).run(embedding, codebook, Number(byKey.get('n_tracks')) || null, oldest.t ?? '1970-01-01 00:00:00')
+  }
+
+  /** Per-mode performance from the feedback log. See nav-performance.ts. */
+  getNavPerformance(surface?: string): ModePerformance[] {
+    const events = this.getAllFeedback()
+    const paired = pairOutcomes(events)
+    return summarize(surface ? onSurface(paired, surface) : paired)
+  }
+
+  /**
+   * Everything the monitoring panel needs, recomputed under the caller's
+   * thresholds.
+   *
+   * The thresholds are inputs rather than settings because where "sustained"
+   * begins is not settled and moving it changes the conclusion. Recomputing
+   * is trivial at this scale, so the panel can show how sensitive a finding
+   * is instead of presenting one cut as fact.
+   */
+  getNavReport(opts?: {
+    surface?: string
+    sustainedThreshold?: number
+    rejectedThreshold?: number
+    samplingGapSeconds?: number
+  }): {
+    byKind: { kind: SessionKind; rows: ModePerformance[]; n: number }[]
+    histogram: { mode: string; counts: number[]; n: number }[]
+    overall: ModePerformance[]
+    totalOutcomes: number
+    taggedOutcomes: number
+    versions: { id: number; embedding_version: string; codebook_version: string; n_tracks: number | null; activated_at: string }[]
+  } {
+    const events = this.getAllFeedback()
+    const all = pairOutcomes(events, undefined, opts?.samplingGapSeconds)
+    const scoped = opts?.surface ? onSurface(all, opts.surface) : all
+
+    return {
+      byKind: summarizeByKind(scoped, opts?.sustainedThreshold, opts?.rejectedThreshold),
+      histogram: completionHistogram(scoped),
+      overall: summarize(scoped, opts?.sustainedThreshold, opts?.rejectedThreshold),
+      totalOutcomes: all.length,
+      taggedOutcomes: all.filter(o => o.surface !== null).length,
+      versions: this.getIndexVersions()
+    }
+  }
+
+  /**
+   * A blind similarity question: an anchor and two candidates, identified only
+   * by id.
+   *
+   * No titles or artists are returned, and that is deliberate. Shown the
+   * metadata, the answer becomes "both of these are indie folk" — a judgement
+   * about labels, which would teach the metric to reproduce genre tags rather
+   * than perceived sound. Listening is the only intended way to answer, which
+   * also means familiarity stops mattering and the whole embedded library is
+   * eligible rather than the few hundred tracks that would be recognisable.
+   */
+  sampleSimilarityTriplet(): { anchorId: string; aId: string; bId: string; cosA: number; cosB: number; margin: number } | null {
+    const rows = this.db.prepare(
+      'SELECT track_id, clap FROM track_semantic'
+    ).all() as { track_id: string; clap: Buffer }[]
+    if (rows.length < 3) return null
+
+    const vectors = new Map<string, number[]>()
+    for (const r of rows) {
+      const f = new Float32Array(r.clap.buffer, r.clap.byteOffset, r.clap.byteLength / 4)
+      vectors.set(r.track_id, Array.from(f))
+    }
+
+    const t = sampleTriplet(vectors, Math.random)
+    if (!t) return null
+    return {
+      anchorId: t.anchorId,
+      aId: t.a.trackId,
+      bId: t.b.trackId,
+      cosA: t.a.cosine,
+      cosB: t.b.cosine,
+      margin: t.margin
+    }
+  }
+
+  recordSimilarityTriplet(
+    anchorId: string, aId: string, bId: string,
+    chosen: 'a' | 'b' | 'unsure', cosA: number, cosB: number
+  ): void {
+    const version = this.db.prepare(
+      "SELECT value FROM semantic_meta WHERE key = 'clap_model'"
+    ).get() as { value: string } | undefined
+    this.db.prepare(
+      'INSERT INTO similarity_triplets (anchor_id, a_id, b_id, chosen, cos_a, cos_b, embedding_version) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(anchorId, aId, bId, chosen, cosA, cosB, version?.value ?? null)
+  }
+
+  /** How often elicited similarity matched the embedding's. Chance is 50%. */
+  getTripletAgreement(): TripletAgreement {
+    const rows = this.db.prepare(
+      'SELECT chosen, cos_a, cos_b FROM similarity_triplets'
+    ).all() as { chosen: string; cos_a: number; cos_b: number }[]
+    return agreement(rows)
+  }
+
+  /**
+   * Tracks whose duration was never determined.
+   *
+   * `localOnly` matters: most of these live on Proton Drive, and reading a
+   * cloud-only file triggers a download, so repairing everything would pull
+   * the library back down. Cached files are free to re-examine.
+   */
+  getTracksNeedingRepair(localOnly = true): { id: string; file_path: string; file_name: string; file_size: number; sync_status: string }[] {
+    const sql = localOnly
+      ? "SELECT id, file_path, file_name, file_size, sync_status FROM tracks WHERE duration <= 0 AND sync_status != 'cloud-only'"
+      : 'SELECT id, file_path, file_name, file_size, sync_status FROM tracks WHERE duration <= 0'
+    return this.db.prepare(sql).all() as { id: string; file_path: string; file_name: string; file_size: number; sync_status: string }[]
+  }
+
+  countTracksNeedingRepair(): { local: number; cloudOnly: number } {
+    const row = this.db.prepare(
+      "SELECT SUM(sync_status != 'cloud-only') AS local, SUM(sync_status = 'cloud-only') AS cloudOnly FROM tracks WHERE duration <= 0"
+    ).get() as { local: number | null; cloudOnly: number | null }
+    return { local: row.local ?? 0, cloudOnly: row.cloudOnly ?? 0 }
+  }
+
+  /** Every feedback event, oldest first — the input to session derivation. */
+  getAllFeedback(): FeedbackRow[] {
+    return this.db.prepare(
+      'SELECT * FROM track_feedback ORDER BY created_at ASC'
+    ).all() as FeedbackRow[]
+  }
+
+  /**
+   * Events belonging to the session in progress, or [] if the last one has
+   * gone idle past the gap.
+   *
+   * Sessionizing here rather than in the renderer keeps the whole feedback
+   * table on this side of the IPC boundary — only the live session crosses.
+   * Only the recent tail is scanned; a session cannot span the gap, so older
+   * rows cannot belong to it.
+   */
+  getCurrentSessionFeedback(nowMs: number = Date.now()): FeedbackRow[] {
+    const cutoff = new Date(nowMs - SESSION_GAP_MS * 2).toISOString().replace('T', ' ').slice(0, 19)
+    const recent = this.db.prepare(
+      'SELECT * FROM track_feedback WHERE created_at >= ? ORDER BY created_at ASC'
+    ).all(cutoff) as FeedbackRow[]
+
+    const live = currentSession(sessionize(recent), nowMs)
+    return live ? live.events : []
   }
 
   // --- Inferred rating: learned model with heuristic fallback ---
@@ -671,6 +1009,13 @@ export class LibraryDatabase {
   ] as const
 
   private static readonly MIN_TRAINING_SAMPLES = 15
+
+  // Ridge penalty for the rating model. Selected by 5-fold CV grouped by
+  // album_artist (grouping matters — random folds let the model memorize an
+  // album's timbre) over 265 rated tracks. R^2 0.21 at lambda=1, 0.28 at 30,
+  // 0.26 at 100 — a broad optimum, so this is not finely tuned to the current
+  // library. Re-check if the feature vector changes shape.
+  private static readonly RIDGE_LAMBDA = 30
 
   /**
    * Build feature vectors for all tracks that have audio features OR feedback.
@@ -807,7 +1152,7 @@ export class LibraryDatabase {
       return normed
     })
 
-    const weights = this.solveRidge(Xnorm, y, 1.0)
+    const weights = this.solveRidge(Xnorm, y, LibraryDatabase.RIDGE_LAMBDA)
     if (!weights) return null
 
     return { weights, means, stds, trainingSize: X.length }

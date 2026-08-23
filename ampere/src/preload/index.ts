@@ -32,8 +32,21 @@ export interface QueueTrackInfo {
 export interface TrackPathResult {
   url: string
   available: boolean
+  /** The file is not on disk at all — distinct from not yet downloaded. */
+  missing: boolean
+  /** The file is present but contains no decodable audio. */
+  unplayable: boolean
   downloading: boolean
   syncStatus: string
+}
+
+export interface NavModeStat {
+  mode: string
+  n: number
+  sustained: number
+  rejected: number
+  sustainedRate: number
+  rejectedRate: number
 }
 
 export interface ElectronAPI {
@@ -71,6 +84,21 @@ export interface ElectronAPI {
   getTrackFeaturesWithCoords(): Promise<{ track_id: string; features_json: string; umap_x: number; umap_y: number; umap_z: number }[]>
   bulkSetUmapCoords(coords: { trackId: string; x: number; y: number; z: number }[]): Promise<void>
   getFeatureCount(): Promise<number>
+  // Semantic index (CLAP + RQ-VAE Semantic IDs from vq)
+  importSemanticIndex(vqDbPath?: string): Promise<{
+    vqTracks: number
+    matched: number
+    unmatchedInVq: number
+    codeNames: number
+    embeddingDim: number | null
+    numLevels: number | null
+    codebookSize: number | null
+  } | null>
+  getSemanticCount(): Promise<number>
+  getSemanticFeatures(): Promise<{ track_id: string; features_json: string; sid_0: number; sid_1: number; sid_2: number }[]>
+  getSemanticFeaturesWithCoords(): Promise<{ track_id: string; features_json: string; umap_x: number; umap_y: number; umap_z: number; sid_0: number; sid_1: number; sid_2: number }[]>
+  bulkSetSemanticUmapCoords(coords: { trackId: string; x: number; y: number; z: number }[]): Promise<void>
+  getSemanticCodeNames(): Promise<{ level: number; code: number; name: string; alts: string }[]>
   readAudioFile(filePath: string): Promise<ArrayBuffer>
   // Cloud-first: downloads + prefetch
   prefetchTracks(trackIds: string[]): Promise<Record<string, string>>
@@ -89,8 +117,24 @@ export interface ElectronAPI {
   unpinTrack(trackId: string): Promise<void>
   evictCache(): Promise<{ evicted: number; freedBytes: number }>
   // Feedback
-  recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null): Promise<void>
-  getTrackFeedback(trackId: string): Promise<{ id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; created_at: string }[]>
+  recordFeedback(trackId: string, eventType: string, eventValue: number | null, attentionWeight: number, source: string | null, surface: string | null, contextJson: string | null): Promise<void>
+  getTrackFeedback(trackId: string): Promise<{ id: number; track_id: string; event_type: string; event_value: number | null; attention_weight: number; source: string | null; surface: string | null; created_at: string }[]>
+  getCurrentSessionFeedback(): Promise<{ track_id: string; event_type: string; event_value: number | null; surface: string | null; created_at: string }[]>
+  getNavReport(opts?: { surface?: string; sustainedThreshold?: number; rejectedThreshold?: number; samplingGapSeconds?: number }): Promise<{
+    byKind: { kind: 'sampling' | 'listening'; rows: NavModeStat[]; n: number }[]
+    histogram: { mode: string; counts: number[]; n: number }[]
+    overall: NavModeStat[]
+    totalOutcomes: number
+    taggedOutcomes: number
+    versions: { id: number; embedding_version: string; codebook_version: string; n_tracks: number | null; activated_at: string }[]
+  }>
+  sampleSimilarityTriplet(): Promise<{ anchorId: string; aId: string; bId: string; cosA: number; cosB: number; margin: number } | null>
+  recordSimilarityTriplet(anchorId: string, aId: string, bId: string, chosen: 'a'|'b'|'unsure', cosA: number, cosB: number): Promise<void>
+  getTripletAgreement(): Promise<{ total: number; agreed: number; unsure: number; rate: number; meanMargin: number }>
+  countTracksNeedingRepair(): Promise<{ local: number; cloudOnly: number }>
+  repairTrackMetadata(includeCloud: boolean): Promise<{ examined: number; failed: number; recovered: number; remaining: { local: number; cloudOnly: number } }>
+  getSetting(key: string): Promise<string | null>
+  setSetting(key: string, value: string): Promise<void>
   recomputeInferredRatings(): Promise<void>
   onInferredRatingsUpdated(callback: (ratings: { id: string; inferred_rating: number }[]) => void): () => void
 }
@@ -149,6 +193,12 @@ const api: ElectronAPI = {
   getTrackFeaturesWithCoords: () => ipcRenderer.invoke('get-track-features-with-coords'),
   bulkSetUmapCoords: (coords) => ipcRenderer.invoke('bulk-set-umap-coords', coords),
   getFeatureCount: () => ipcRenderer.invoke('get-feature-count'),
+  importSemanticIndex: (vqDbPath?: string) => ipcRenderer.invoke('import-semantic-index', vqDbPath),
+  getSemanticCount: () => ipcRenderer.invoke('get-semantic-count'),
+  getSemanticFeatures: () => ipcRenderer.invoke('get-semantic-features'),
+  getSemanticFeaturesWithCoords: () => ipcRenderer.invoke('get-semantic-features-with-coords'),
+  bulkSetSemanticUmapCoords: (coords) => ipcRenderer.invoke('bulk-set-semantic-umap-coords', coords),
+  getSemanticCodeNames: () => ipcRenderer.invoke('get-semantic-code-names'),
   readAudioFile: (filePath) => ipcRenderer.invoke('read-audio-file', filePath),
   // Cloud-first: downloads + prefetch
   prefetchTracks: (trackIds) => ipcRenderer.invoke('prefetch-tracks', trackIds),
@@ -175,9 +225,19 @@ const api: ElectronAPI = {
   unpinTrack: (trackId) => ipcRenderer.invoke('unpin-track', trackId),
   evictCache: () => ipcRenderer.invoke('evict-cache'),
   // Feedback
-  recordFeedback: (trackId, eventType, eventValue, attentionWeight, source) =>
-    ipcRenderer.invoke('record-feedback', trackId, eventType, eventValue, attentionWeight, source),
+  recordFeedback: (trackId, eventType, eventValue, attentionWeight, source, surface, contextJson) =>
+    ipcRenderer.invoke('record-feedback', trackId, eventType, eventValue, attentionWeight, source, surface, contextJson),
   getTrackFeedback: (trackId) => ipcRenderer.invoke('get-track-feedback', trackId),
+  getCurrentSessionFeedback: () => ipcRenderer.invoke('get-current-session-feedback'),
+  getNavReport: (opts?) => ipcRenderer.invoke('get-nav-report', opts),
+  sampleSimilarityTriplet: () => ipcRenderer.invoke('sample-similarity-triplet'),
+  recordSimilarityTriplet: (anchorId, aId, bId, chosen, cosA, cosB) =>
+    ipcRenderer.invoke('record-similarity-triplet', anchorId, aId, bId, chosen, cosA, cosB),
+  getTripletAgreement: () => ipcRenderer.invoke('get-triplet-agreement'),
+  countTracksNeedingRepair: () => ipcRenderer.invoke('count-tracks-needing-repair'),
+  repairTrackMetadata: (includeCloud) => ipcRenderer.invoke('repair-track-metadata', includeCloud),
+  getSetting: (key) => ipcRenderer.invoke('get-setting', key),
+  setSetting: (key, value) => ipcRenderer.invoke('set-setting', key, value),
   recomputeInferredRatings: () => ipcRenderer.invoke('recompute-inferred-ratings'),
   onInferredRatingsUpdated: (callback) => {
     const handler = (_event: unknown, ratings: { id: string; inferred_rating: number }[]): void => callback(ratings)
